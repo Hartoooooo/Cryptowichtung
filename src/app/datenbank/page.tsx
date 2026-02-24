@@ -226,7 +226,7 @@ export default function DatenbankPage() {
               <div
                 className="overflow-y-auto transition-[max-height] duration-200"
                 style={{
-                  maxHeight: `${52 * (1 + (selected?.constituents?.length ?? 1))}px`,
+                  maxHeight: `${52 * (1 + Math.max(5, selected?.constituents?.length ?? 1))}px`,
                 }}
               >
                 {sortedData.map((item) => (
