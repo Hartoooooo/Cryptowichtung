@@ -1,13 +1,57 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
-import { PieChart, Pie, Cell, ResponsiveContainer, Legend, Tooltip } from "recharts";
+import { PieChart, Pie, Cell, ResponsiveContainer, Legend } from "recharts";
 
 interface ConstituentWeight {
   name: string;
   weight: number;
 }
+
+// Ticker/Name → CoinGecko API id
+const COINGECKO_IDS: Record<string, string> = {
+  BTC: "bitcoin",
+  Bitcoin: "bitcoin",
+  ETH: "ethereum",
+  Ethereum: "ethereum",
+  XRP: "ripple",
+  Ripple: "ripple",
+  SOL: "solana",
+  Solana: "solana",
+  ADA: "cardano",
+  Cardano: "cardano",
+  DOT: "polkadot",
+  Polkadot: "polkadot",
+  LTC: "litecoin",
+  Litecoin: "litecoin",
+  AVAX: "avalanche-2",
+  Avalanche: "avalanche-2",
+  MATIC: "matic-network",
+  Polygon: "matic-network",
+  LINK: "chainlink",
+  Chainlink: "chainlink",
+  UNI: "uniswap",
+  Uniswap: "uniswap",
+  ICP: "internet-computer",
+  NEAR: "near",
+  APT: "aptos",
+  SUI: "sui",
+  ATOM: "cosmos",
+  BNB: "binancecoin",
+  DOGE: "dogecoin",
+  FIL: "filecoin",
+  HBAR: "hedera-hashgraph",
+  VET: "vechain",
+  ALGO: "algorand",
+  XLM: "stellar",
+  TON: "the-open-network",
+  ARB: "arbitrum",
+  OP: "optimism",
+  INJ: "injective-protocol",
+  TIA: "celestia",
+  STX: "blockstack",
+};
 
 interface WeightResult {
   id: string;
@@ -33,6 +77,21 @@ export default function DatenbankPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<WeightResult | null>(null);
+  const [priceCache, setPriceCache] = useState<Record<string, number>>({});
+
+  const coinGeckoIds = useMemo(() => {
+    if (!selected) return [];
+    const ids = new Set<string>();
+    for (const c of selected.constituents) {
+      const id = COINGECKO_IDS[c.name];
+      if (id) ids.add(id);
+    }
+    return Array.from(ids);
+  }, [selected]);
+
+  const idsToFetch = useMemo(() => {
+    return coinGeckoIds.filter((id) => !(id in priceCache));
+  }, [coinGeckoIds, priceCache]);
 
   useEffect(() => {
     fetch("/api/weight-results")
@@ -49,6 +108,22 @@ export default function DatenbankPage() {
       .catch(() => setError("Fehler beim Laden"))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (idsToFetch.length === 0) return;
+    const ids = idsToFetch.join(",");
+    fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`)
+      .then((res) => res.json())
+      .then((data) => {
+        const newPrices: Record<string, number> = {};
+        for (const [id, obj] of Object.entries(data)) {
+          const usd = (obj as { usd?: number }).usd;
+          if (typeof usd === "number") newPrices[id] = usd;
+        }
+        setPriceCache((prev) => ({ ...prev, ...newPrices }));
+      })
+      .catch(() => {});
+  }, [idsToFetch.join(",")]);
 
   if (loading) {
     return (
@@ -144,19 +219,6 @@ export default function DatenbankPage() {
                               />
                             ))}
                           </Pie>
-                          <Tooltip
-                            formatter={(value) =>
-                              typeof value === "number"
-                                ? `${value.toFixed(2)}%`
-                                : `${value}`
-                            }
-                            contentStyle={{
-                              backgroundColor: "#262626",
-                              border: "1px solid #404040",
-                              borderRadius: "8px",
-                            }}
-                            labelStyle={{ color: "#e5e5e5" }}
-                          />
                           <Legend />
                         </PieChart>
                       </ResponsiveContainer>
@@ -164,34 +226,44 @@ export default function DatenbankPage() {
                   </div>
 
                   <div className="rounded-2xl border border-neutral-800 bg-neutral-900/50 overflow-hidden">
-                    <div className="px-5 py-3 border-b border-neutral-800">
+                    <div className="px-5 py-3 border-b border-neutral-800 flex justify-between items-center">
                       <span className="text-sm text-neutral-400">
                         Konstituenten ({selected.constituents.length})
                       </span>
+                      <span className="text-xs text-neutral-500">Kurs (USD)</span>
                     </div>
                     <ul className="divide-y divide-neutral-800">
                       {selected.constituents
                         .sort((a, b) => b.weight - a.weight)
-                        .map((c, i) => (
-                          <li
-                            key={i}
-                            className="flex justify-between px-5 py-3 text-sm"
-                          >
-                            <span
-                              className="w-3 h-3 rounded-full shrink-0 mt-1.5 mr-2"
-                              style={{
-                                backgroundColor:
-                                  CHART_COLORS[i % CHART_COLORS.length],
-                              }}
-                            />
-                            <span className="flex-1 text-neutral-200">
-                              {c.name}
-                            </span>
-                            <span className="text-neutral-400 tabular-nums">
-                              {c.weight.toFixed(2)}%
-                            </span>
-                          </li>
-                        ))}
+                        .map((c, i) => {
+                          const geckoId = COINGECKO_IDS[c.name];
+                          const usd = geckoId ? priceCache[geckoId] : null;
+                          return (
+                            <li
+                              key={i}
+                              className="flex justify-between items-center gap-4 px-5 py-3 text-sm"
+                            >
+                              <span
+                                className="w-3 h-3 rounded-full shrink-0"
+                                style={{
+                                  backgroundColor:
+                                    CHART_COLORS[i % CHART_COLORS.length],
+                                }}
+                              />
+                              <span className="flex-1 text-neutral-200">
+                                {c.name}
+                              </span>
+                              <span className="text-neutral-400 tabular-nums">
+                                {c.weight.toFixed(2)}%
+                              </span>
+                              <span className="text-amber-400 tabular-nums w-24 text-right shrink-0">
+                                {usd != null
+                                  ? `$${usd >= 1 ? usd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : usd.toFixed(4)}`
+                                  : ""}
+                              </span>
+                            </li>
+                          );
+                        })}
                     </ul>
                   </div>
                 </>
