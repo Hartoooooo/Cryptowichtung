@@ -448,7 +448,7 @@ export default function AuswertungPage() {
             <div className="mb-8 rounded-2xl border border-neutral-800 bg-neutral-900/50 overflow-hidden">
               <div className="px-5 py-3 border-b border-neutral-800 flex justify-between items-center">
                 <span className="text-sm text-neutral-400">
-                  Gefundene ISINs ({matched.length})
+                  Gefundene Trades ({matched.length})
                 </span>
                 <span className="text-sm text-neutral-500">
                   Gesamt: <span className="text-neutral-200 tabular-nums">{formatAmount(totalBetrag)}</span>
