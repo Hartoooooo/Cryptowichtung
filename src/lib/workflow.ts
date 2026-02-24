@@ -3,7 +3,7 @@
  * Unterstützte Anbieter: 21Shares, VanEck, Bitwise/ETC Group, DDA
  */
 
-import { createHash } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import mappingData from "@/data/isin-mapping.json";
 import { validateUrlForFetch } from "./allowlist";
 import {
@@ -13,11 +13,93 @@ import {
   FETCH_RETRIES,
   USER_AGENT,
 } from "./constants";
-import { prisma } from "./db";
+import { supabaseAdmin } from "./supabase";
 import { extractTextViaOcr } from "./pdf-ocr";
 import { downloadPdf, extractTextFromPdf } from "./pdf-extract";
 import { parseFactsheetText, ConstituentWeight } from "./parser";
 import { fetchConstituentsFromApi, fetchNavFromApi, resolveTickerFromProductList } from "./holdings-api";
+
+// ---------------------------------------------------------------------------
+// Supabase-Helpers (ersetzen Prisma – nutzen HTTP statt direkter DB-Verbindung)
+// ---------------------------------------------------------------------------
+
+type IsinCacheRow = {
+  id: string;
+  isin: string;
+  sourcePdfUrl: string;
+  asOfDate: string | null;
+  weightsJson: string;
+  fetchedAt: string;
+  expiresAt: string;
+  parseVersion: number;
+  sha256Pdf: string | null;
+};
+
+async function findCachedIsin(isin: string): Promise<IsinCacheRow | null> {
+  const { data } = await supabaseAdmin!
+    .from("IsinCache")
+    .select("*")
+    .eq("isin", isin)
+    .maybeSingle();
+  return data ?? null;
+}
+
+async function upsertIsinCache(row: Omit<IsinCacheRow, "id" | "parseVersion"> & { parseVersion?: number }) {
+  const { data: existing } = await supabaseAdmin!
+    .from("IsinCache")
+    .select("id")
+    .eq("isin", row.isin)
+    .maybeSingle();
+
+  if (existing) {
+    await supabaseAdmin!
+      .from("IsinCache")
+      .update({
+        sourcePdfUrl: row.sourcePdfUrl,
+        asOfDate: row.asOfDate,
+        weightsJson: row.weightsJson,
+        fetchedAt: row.fetchedAt,
+        expiresAt: row.expiresAt,
+        sha256Pdf: row.sha256Pdf ?? null,
+      })
+      .eq("isin", row.isin);
+  } else {
+    await supabaseAdmin!
+      .from("IsinCache")
+      .insert({
+        id: randomUUID(),
+        isin: row.isin,
+        sourcePdfUrl: row.sourcePdfUrl,
+        asOfDate: row.asOfDate,
+        weightsJson: row.weightsJson,
+        fetchedAt: row.fetchedAt,
+        expiresAt: row.expiresAt,
+        parseVersion: row.parseVersion ?? PARSE_VERSION,
+        sha256Pdf: row.sha256Pdf ?? null,
+      });
+  }
+}
+
+async function insertFetchLog(data: {
+  isin: string;
+  attemptAt: Date;
+  status: string;
+  message?: string | null;
+  httpStatus?: number | null;
+  sourceUrl?: string | null;
+}) {
+  await supabaseAdmin!.from("FetchLog").insert({
+    id: randomUUID(),
+    isin: data.isin,
+    attemptAt: data.attemptAt.toISOString(),
+    status: data.status,
+    message: data.message ?? null,
+    httpStatus: data.httpStatus ?? null,
+    sourceUrl: data.sourceUrl ?? null,
+  });
+}
+
+// ---------------------------------------------------------------------------
 
 export interface WeightsResult {
   isin: string;
@@ -77,6 +159,9 @@ const COIN_NAME_PATTERNS: Array<{ names: string[]; ticker: string }> = [
   { names: ["stellar"], ticker: "XLM" },
   { names: ["toncoin"], ticker: "TON" },
   { names: ["dogecoin"], ticker: "DOGE" },
+  { names: ["cosmos", "atom"], ticker: "ATOM" },
+  { names: ["tron", "trx"], ticker: "TRX" },
+  { names: ["sui"], ticker: "SUI" },
   { names: ["gold"], ticker: "GOLD" },
   { names: ["silver"], ticker: "SILVER" },
 ];
@@ -447,6 +532,10 @@ const JUSTETF_INDEX_TO_TICKER: Record<string, string> = {
   aptos: "APT",
   sui: "SUI",
   near: "NEAR",
+  cosmos: "ATOM",
+  atom: "ATOM",
+  tron: "TRX",
+  trx: "TRX",
 };
 
 const JUSTETF_SINGLE_ASSET_PATTERNS = [
@@ -462,6 +551,11 @@ const JUSTETF_SINGLE_ASSET_PATTERNS = [
   "polygon",
   "chainlink",
   "uniswap",
+  "cosmos",
+  "atom",
+  "tron",
+  "trx",
+  "sui",
 ];
 
 /** Extrahiert Single-Asset-Konstituenten aus JustETF-Profilseite (Index/Investment Focus) */
@@ -477,16 +571,16 @@ function extractConstituentsFromJustEtfHtml(html: string, productTitle?: string)
     if (ticker) return [{ name: ticker, weight: 100 }];
   }
 
-  // "tracks the value of the cryptocurrency Ethereum/Bitcoin"
-  const cryptoMatch = text.match(/cryptocurrency\s+(Ethereum|Bitcoin|XRP|Ripple|Solana|Cardano|Polkadot|Litecoin)/i);
+  // "tracks the value of the cryptocurrency Ethereum/Bitcoin/Cosmos"
+  const cryptoMatch = text.match(/cryptocurrency\s+(Ethereum|Bitcoin|XRP|Ripple|Solana|Cardano|Polkadot|Litecoin|Cosmos|Atom)/i);
   if (cryptoMatch) {
     const asset = cryptoMatch[1].toLowerCase();
     const ticker = JUSTETF_INDEX_TO_TICKER[asset] ?? (asset === "ripple" ? "XRP" : null);
     if (ticker) return [{ name: ticker, weight: 100 }];
   }
 
-  // Investment focus / Data-Tabelle: "Ethereum" als Tabellenwert
-  const dataMatch = html.match(/Investment focus[\s\S]{0,300}?>(Ethereum|Bitcoin|XRP|Ripple|Solana|Cardano|Polkadot|Litecoin)</i);
+  // Investment focus / Data-Tabelle: "Cosmos" als Tabellenwert
+  const dataMatch = html.match(/Investment focus[\s\S]{0,300}?>(Ethereum|Bitcoin|XRP|Ripple|Solana|Cardano|Polkadot|Litecoin|Cosmos|Atom)</i);
   if (dataMatch) {
     const asset = dataMatch[1].toLowerCase();
     const ticker = JUSTETF_INDEX_TO_TICKER[asset] ?? (asset === "ripple" ? "XRP" : null);
@@ -705,6 +799,55 @@ function extractTickerFromFactsheetUrl(url: string): string | null {
   return null;
 }
 
+// ─────────────────────────────────────────────
+// CoinShares-Fallback: JustETF-Seite parsen wenn PDF nicht lesbar
+// ─────────────────────────────────────────────
+
+/**
+ * Ruft die JustETF-Profilseite für eine ISIN auf und extrahiert
+ * den Coin aus dem "Index: X" / "Investment focus" / Produkttitel.
+ * Wird als Fallback für CoinShares verwendet, wenn das KID-PDF nicht
+ * gelesen werden kann.
+ */
+async function fetchConstituentsFromCoinsharesFallback(
+  isin: string
+): Promise<ConstituentWeight[] | null> {
+  const url = `${JUSTETF_PROFILE_URL}?isin=${encodeURIComponent(isin)}`;
+  validateUrlForFetch(url);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: { "User-Agent": USER_AGENT },
+    });
+    clearTimeout(timeout);
+    if (!res.ok) return null;
+
+    const html = await res.text();
+
+    const titleMatch = html.match(/<title>([^|<]+)/);
+    const productTitle = titleMatch?.[1]?.trim() ?? "";
+
+    // 1. Konstituenten aus JustETF-HTML extrahieren (Index/Investment Focus)
+    const fromHtml = extractConstituentsFromJustEtfHtml(html, productTitle);
+    if (fromHtml && fromHtml.length > 0) return fromHtml;
+
+    // 2. Produkttitel auswerten, z.B. "CoinShares Physical Cosmos"
+    if (productTitle) {
+      const ticker = extractSingleCoinFromName(productTitle);
+      if (ticker) return [{ name: ticker, weight: 100 }];
+    }
+
+    return null;
+  } catch {
+    clearTimeout(timeout);
+    return null;
+  }
+}
+
 async function fetchWithRetries(url: string): Promise<Buffer> {
   let lastError: Error | null = null;
   for (let i = 0; i <= FETCH_RETRIES; i++) {
@@ -722,7 +865,7 @@ async function fetchWithRetries(url: string): Promise<Buffer> {
 // Haupt-Workflow
 // ─────────────────────────────────────────────
 
-export async function runWorkflow(isin: string): Promise<WeightsResult | WorkflowError> {
+export async function runWorkflow(isin: string, excelProductName?: string): Promise<WeightsResult | WorkflowError> {
   const normalizedIsin = normalizeIsin(isin);
 
   try {
@@ -736,11 +879,9 @@ export async function runWorkflow(isin: string): Promise<WeightsResult | Workflo
 
   const now = new Date();
 
-  const cached = await prisma.isinCache.findUnique({
-    where: { isin: normalizedIsin },
-  });
+  const cached = await findCachedIsin(normalizedIsin);
 
-  if (cached && cached.expiresAt > now) {
+  if (cached && new Date(cached.expiresAt) > now) {
     const constituents = JSON.parse(cached.weightsJson) as ConstituentWeight[];
     const cachedTicker = extractTickerFromFactsheetUrl(cached.sourcePdfUrl);
     const navUsd = cachedTicker ? await fetchNavFromApi(cachedTicker).catch(() => null) : null;
@@ -751,9 +892,46 @@ export async function runWorkflow(isin: string): Promise<WeightsResult | Workflo
       navUsd,
       sourcePdfUrl: cached.sourcePdfUrl,
       cacheStatus: "HIT",
-      fetchedAt: cached.fetchedAt.toISOString(),
+      fetchedAt: new Date(cached.fetchedAt).toISOString(),
     };
   }
+
+  // ── Priorität 1: Instruments Short Name aus Excel ──────────────────────────
+  // Wenn der Nutzer einen Produktnamen aus seiner Depotliste mitschickt und
+  // darin genau EIN Crypto-Asset vorkommt → sofort 100% speichern, kein PDF nötig.
+  if (excelProductName) {
+    const singleCoin = extractSingleCoinFromName(excelProductName);
+    if (singleCoin) {
+      const constituents: ConstituentWeight[] = [{ name: singleCoin, weight: 100 }];
+      const expiresAt = new Date(now.getTime() + CACHE_TTL_SUCCESS_MS);
+      await upsertIsinCache({
+        isin: normalizedIsin,
+        sourcePdfUrl: `excel:${normalizedIsin}`,
+        asOfDate: null,
+        weightsJson: JSON.stringify(constituents),
+        fetchedAt: now.toISOString(),
+        expiresAt: expiresAt.toISOString(),
+        sha256Pdf: null,
+      });
+      await insertFetchLog({
+        isin: normalizedIsin,
+        attemptAt: now,
+        status: "success",
+        message: `Single-Asset aus Excel-Name: ${singleCoin} 100% (${excelProductName})`,
+        sourceUrl: null,
+      });
+      return {
+        isin: normalizedIsin,
+        asOfDate: null,
+        constituents,
+        navUsd: await fetchNavFromApi(singleCoin).catch(() => null),
+        sourcePdfUrl: `excel:${normalizedIsin}`,
+        cacheStatus: "MISS",
+        fetchedAt: now.toISOString(),
+      };
+    }
+  }
+  // ────────────────────────────────────────────────────────────────────────────
 
   let sourcePdfUrl: string;
   let detectedProvider: Provider;
@@ -770,14 +948,12 @@ export async function runWorkflow(isin: string): Promise<WeightsResult | Workflo
       productName = resolved.productName;
     }
   } catch (e) {
-    await prisma.fetchLog.create({
-      data: {
-        isin: normalizedIsin,
-        attemptAt: now,
-        status: "error",
-        message: e instanceof Error ? e.message : String(e),
-        sourceUrl: null,
-      },
+    await insertFetchLog({
+      isin: normalizedIsin,
+      attemptAt: now,
+      status: "error",
+      message: e instanceof Error ? e.message : String(e),
+      sourceUrl: null,
     });
     return {
       code: "URL_NOT_FOUND",
@@ -790,32 +966,20 @@ export async function runWorkflow(isin: string): Promise<WeightsResult | Workflo
     const cachedTicker = justEtfConstituents[0]?.name ?? null;
     const navUsd = cachedTicker ? await fetchNavFromApi(cachedTicker).catch(() => null) : null;
     const expiresAt = new Date(now.getTime() + CACHE_TTL_SUCCESS_MS);
-    await prisma.isinCache.upsert({
-      where: { isin: normalizedIsin },
-      create: {
-        isin: normalizedIsin,
-        sourcePdfUrl,
-        asOfDate: null,
-        weightsJson: JSON.stringify(justEtfConstituents),
-        fetchedAt: now,
-        expiresAt,
-        parseVersion: PARSE_VERSION,
-        sha256Pdf: null,
-      },
-      update: {
-        sourcePdfUrl,
-        weightsJson: JSON.stringify(justEtfConstituents),
-        fetchedAt: now,
-        expiresAt,
-      },
+    await upsertIsinCache({
+      isin: normalizedIsin,
+      sourcePdfUrl,
+      asOfDate: null,
+      weightsJson: JSON.stringify(justEtfConstituents),
+      fetchedAt: now.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+      sha256Pdf: null,
     });
-    await prisma.fetchLog.create({
-      data: {
-        isin: normalizedIsin,
-        attemptAt: now,
-        status: "success",
-        sourceUrl: sourcePdfUrl,
-      },
+    await insertFetchLog({
+      isin: normalizedIsin,
+      attemptAt: now,
+      status: "success",
+      sourceUrl: sourcePdfUrl,
     });
     return {
       isin: normalizedIsin,
@@ -837,33 +1001,21 @@ export async function runWorkflow(isin: string): Promise<WeightsResult | Workflo
       const navTicker = extractTickerFromFactsheetUrl(sourcePdfUrl);
       const navUsd = navTicker ? await fetchNavFromApi(navTicker).catch(() => null) : null;
       const expiresAt = new Date(now.getTime() + CACHE_TTL_SUCCESS_MS);
-      await prisma.isinCache.upsert({
-        where: { isin: normalizedIsin },
-        create: {
-          isin: normalizedIsin,
-          sourcePdfUrl,
-          asOfDate: null,
-          weightsJson: JSON.stringify(singleCoinConstituents),
-          fetchedAt: now,
-          expiresAt,
-          parseVersion: PARSE_VERSION,
-          sha256Pdf: null,
-        },
-        update: {
-          sourcePdfUrl,
-          weightsJson: JSON.stringify(singleCoinConstituents),
-          fetchedAt: now,
-          expiresAt,
-        },
+      await upsertIsinCache({
+        isin: normalizedIsin,
+        sourcePdfUrl,
+        asOfDate: null,
+        weightsJson: JSON.stringify(singleCoinConstituents),
+        fetchedAt: now.toISOString(),
+        expiresAt: expiresAt.toISOString(),
+        sha256Pdf: null,
       });
-      await prisma.fetchLog.create({
-        data: {
-          isin: normalizedIsin,
-          attemptAt: now,
-          status: "success",
-          message: `Single-Asset aus Produktname: ${singleCoin} 100% (${productName})`,
-          sourceUrl: sourcePdfUrl,
-        },
+      await insertFetchLog({
+        isin: normalizedIsin,
+        attemptAt: now,
+        status: "success",
+        message: `Single-Asset aus Produktname: ${singleCoin} 100% (${productName})`,
+        sourceUrl: sourcePdfUrl,
       });
       return {
         isin: normalizedIsin,
@@ -883,35 +1035,58 @@ export async function runWorkflow(isin: string): Promise<WeightsResult | Workflo
     buffer = await fetchWithRetries(sourcePdfUrl);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    await prisma.fetchLog.create({
-      data: {
-        isin: normalizedIsin,
-        attemptAt: now,
-        status: "error",
-        message: msg,
-        httpStatus: undefined,
-        sourceUrl: sourcePdfUrl,
-      },
+
+    // CoinShares-Fallback: JustETF-Seite auswerten wenn KID-PDF nicht ladbar
+    if (detectedProvider === "coinshares") {
+      const fallbackConstituents = await fetchConstituentsFromCoinsharesFallback(normalizedIsin);
+      if (fallbackConstituents && fallbackConstituents.length > 0) {
+        const expiresAt = new Date(now.getTime() + CACHE_TTL_SUCCESS_MS);
+        await upsertIsinCache({
+          isin: normalizedIsin,
+          sourcePdfUrl,
+          asOfDate: null,
+          weightsJson: JSON.stringify(fallbackConstituents),
+          fetchedAt: now.toISOString(),
+          expiresAt: expiresAt.toISOString(),
+          sha256Pdf: null,
+        });
+        await insertFetchLog({
+          isin: normalizedIsin,
+          attemptAt: now,
+          status: "success",
+          message: `CoinShares-Fallback (JustETF): ${fallbackConstituents[0].name} 100% – PDF nicht ladbar: ${msg}`,
+          sourceUrl: sourcePdfUrl,
+        });
+        const navUsd = await fetchNavFromApi(fallbackConstituents[0].name).catch(() => null);
+        return {
+          isin: normalizedIsin,
+          asOfDate: null,
+          constituents: fallbackConstituents,
+          navUsd,
+          sourcePdfUrl,
+          cacheStatus: "MISS",
+          fetchedAt: now.toISOString(),
+        };
+      }
+    }
+
+    await insertFetchLog({
+      isin: normalizedIsin,
+      attemptAt: now,
+      status: "error",
+      message: msg,
+      sourceUrl: sourcePdfUrl,
     });
 
     const negExpiry = new Date(now.getTime() + CACHE_TTL_FAILURE_MS);
-    await prisma.isinCache.upsert({
-      where: { isin: normalizedIsin },
-      create: {
-        isin: normalizedIsin,
-        sourcePdfUrl,
-        asOfDate: null,
-        weightsJson: "[]",
-        fetchedAt: now,
-        expiresAt: negExpiry,
-        parseVersion: PARSE_VERSION,
-        sha256Pdf: null,
-      },
-      update: {
-        weightsJson: "[]",
-        fetchedAt: now,
-        expiresAt: negExpiry,
-      },
+    await upsertIsinCache({
+      isin: normalizedIsin,
+      sourcePdfUrl,
+      asOfDate: null,
+      weightsJson: "[]",
+      fetchedAt: now.toISOString(),
+      expiresAt: negExpiry.toISOString(),
+      sha256Pdf: null,
     });
 
     return {
@@ -925,18 +1100,52 @@ export async function runWorkflow(isin: string): Promise<WeightsResult | Workflo
   try {
     text = await extractTextFromPdf(buffer);
   } catch (e) {
-    await prisma.fetchLog.create({
-      data: {
-        isin: normalizedIsin,
-        attemptAt: now,
-        status: "error",
-        message: e instanceof Error ? e.message : "PDF-Parse fehlgeschlagen",
-        sourceUrl: sourcePdfUrl,
-      },
+    const msg = e instanceof Error ? e.message : "PDF-Parse fehlgeschlagen";
+
+    // CoinShares-Fallback: JustETF-Seite auswerten wenn PDF nicht lesbar
+    if (detectedProvider === "coinshares") {
+      const fallbackConstituents = await fetchConstituentsFromCoinsharesFallback(normalizedIsin);
+      if (fallbackConstituents && fallbackConstituents.length > 0) {
+        const expiresAt = new Date(now.getTime() + CACHE_TTL_SUCCESS_MS);
+        await upsertIsinCache({
+          isin: normalizedIsin,
+          sourcePdfUrl,
+          asOfDate: null,
+          weightsJson: JSON.stringify(fallbackConstituents),
+          fetchedAt: now.toISOString(),
+          expiresAt: expiresAt.toISOString(),
+          sha256Pdf: null,
+        });
+        await insertFetchLog({
+          isin: normalizedIsin,
+          attemptAt: now,
+          status: "success",
+          message: `CoinShares-Fallback (JustETF): ${fallbackConstituents[0].name} 100% – PDF nicht lesbar: ${msg}`,
+          sourceUrl: sourcePdfUrl,
+        });
+        const navUsd = await fetchNavFromApi(fallbackConstituents[0].name).catch(() => null);
+        return {
+          isin: normalizedIsin,
+          asOfDate: null,
+          constituents: fallbackConstituents,
+          navUsd,
+          sourcePdfUrl,
+          cacheStatus: "MISS",
+          fetchedAt: now.toISOString(),
+        };
+      }
+    }
+
+    await insertFetchLog({
+      isin: normalizedIsin,
+      attemptAt: now,
+      status: "error",
+      message: msg,
+      sourceUrl: sourcePdfUrl,
     });
     return {
       code: "PARSE_FAILED",
-      message: e instanceof Error ? e.message : "PDF-Text konnte nicht extrahiert werden",
+      message: msg,
     };
   }
 
@@ -986,18 +1195,50 @@ export async function runWorkflow(isin: string): Promise<WeightsResult | Workflo
 
   const finalSum = constituents.reduce((s, c) => s + c.weight, 0);
   if (constituents.length < 1 || finalSum < 90 || finalSum > 110) {
+    // CoinShares-Fallback: JustETF-Seite auswerten wenn PDF-Parsing ungültige Werte liefert
+    if (detectedProvider === "coinshares") {
+      const fallbackConstituents = await fetchConstituentsFromCoinsharesFallback(normalizedIsin);
+      if (fallbackConstituents && fallbackConstituents.length > 0) {
+        const expiresAt = new Date(now.getTime() + CACHE_TTL_SUCCESS_MS);
+        await upsertIsinCache({
+          isin: normalizedIsin,
+          sourcePdfUrl,
+          asOfDate: null,
+          weightsJson: JSON.stringify(fallbackConstituents),
+          fetchedAt: now.toISOString(),
+          expiresAt: expiresAt.toISOString(),
+          sha256Pdf: null,
+        });
+        await insertFetchLog({
+          isin: normalizedIsin,
+          attemptAt: now,
+          status: "success",
+          message: `CoinShares-Fallback (JustETF): ${fallbackConstituents[0].name} 100% – PDF-Parsing ungültig (Summe ${finalSum.toFixed(2)}%)`,
+          sourceUrl: sourcePdfUrl,
+        });
+        const navUsd = await fetchNavFromApi(fallbackConstituents[0].name).catch(() => null);
+        return {
+          isin: normalizedIsin,
+          asOfDate: null,
+          constituents: fallbackConstituents,
+          navUsd,
+          sourcePdfUrl,
+          cacheStatus: "MISS",
+          fetchedAt: now.toISOString(),
+        };
+      }
+    }
+
     const msg =
       constituents.length < 1
         ? "Keine Konstituenten extrahiert. Asset-Allokation könnte als Grafik vorliegen."
         : `Gewichtssumme ${finalSum.toFixed(2)}% liegt außerhalb der Toleranz (90–110%).`;
-    await prisma.fetchLog.create({
-      data: {
-        isin: normalizedIsin,
-        attemptAt: now,
-        status: "error",
-        message: msg,
-        sourceUrl: sourcePdfUrl,
-      },
+    await insertFetchLog({
+      isin: normalizedIsin,
+      attemptAt: now,
+      status: "error",
+      message: msg,
+      sourceUrl: sourcePdfUrl,
     });
     return {
       code:
@@ -1009,37 +1250,23 @@ export async function runWorkflow(isin: string): Promise<WeightsResult | Workflo
   const sha = sha256(buffer);
   const expiry = new Date(now.getTime() + CACHE_TTL_SUCCESS_MS);
 
-  await prisma.isinCache.upsert({
-    where: { isin: normalizedIsin },
-    create: {
-      isin: normalizedIsin,
-      sourcePdfUrl,
-      asOfDate,
-      weightsJson: JSON.stringify(constituents),
-      fetchedAt: now,
-      expiresAt: expiry,
-      parseVersion: PARSE_VERSION,
-      sha256Pdf: sha,
-    },
-    update: {
-      sourcePdfUrl,
-      asOfDate,
-      weightsJson: JSON.stringify(constituents),
-      fetchedAt: now,
-      expiresAt: expiry,
-      sha256Pdf: sha,
-    },
+  await upsertIsinCache({
+    isin: normalizedIsin,
+    sourcePdfUrl,
+    asOfDate,
+    weightsJson: JSON.stringify(constituents),
+    fetchedAt: now.toISOString(),
+    expiresAt: expiry.toISOString(),
+    sha256Pdf: sha,
   });
 
-  await prisma.fetchLog.create({
-    data: {
-      isin: normalizedIsin,
-      attemptAt: now,
-      status: "success",
-      message: `${constituents.length} Konstituenten (${detectedProvider})`,
-      httpStatus: 200,
-      sourceUrl: sourcePdfUrl,
-    },
+  await insertFetchLog({
+    isin: normalizedIsin,
+    attemptAt: now,
+    status: "success",
+    message: `${constituents.length} Konstituenten (${detectedProvider})`,
+    httpStatus: 200,
+    sourceUrl: sourcePdfUrl,
   });
 
   const navTicker = extractTickerFromFactsheetUrl(sourcePdfUrl);

@@ -170,12 +170,14 @@ export default function DatenbankPage() {
       <div className="mx-auto max-w-5xl px-6 py-12">
         <div className="flex justify-between items-center mb-8">
           <h1 className="text-2xl tracking-tight">Datenbank & Gewichtung</h1>
-          <Link
-            href="/"
-            className="text-amber-400 hover:text-amber-300 text-sm"
-          >
-            ← Zurück
-          </Link>
+          <div className="flex gap-4 text-sm">
+            <Link href="/auswertung" className="text-amber-400 hover:text-amber-300">
+              Auswertung
+            </Link>
+            <Link href="/" className="text-amber-400 hover:text-amber-300">
+              ← Zurück
+            </Link>
+          </div>
         </div>
 
         {error && (

@@ -197,7 +197,7 @@ export default function Home() {
         const res = await fetch("/api/weights", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ isin: row.isin }),
+          body: JSON.stringify({ isin: row.isin, productName: row.name }),
         });
         const data = await res.json();
         if (!res.ok) {
@@ -260,12 +260,14 @@ export default function Home() {
               Konstituenten-Gewichte aus Factsheet-PDFs (21Shares, VanEck, Bitwise, DDA)
             </p>
           </div>
-          <Link
-            href="/datenbank"
-            className="text-amber-400 hover:text-amber-300 text-sm shrink-0"
-          >
-            Datenbank →
-          </Link>
+          <div className="flex gap-4 text-sm shrink-0">
+            <Link href="/auswertung" className="text-amber-400 hover:text-amber-300">
+              Auswertung
+            </Link>
+            <Link href="/datenbank" className="text-amber-400 hover:text-amber-300">
+              Datenbank →
+            </Link>
+          </div>
         </div>
 
         {/* Excel Drag & Drop */}

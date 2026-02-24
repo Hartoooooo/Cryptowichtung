@@ -5,6 +5,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const isin = body?.isin;
+    const productName = typeof body?.productName === "string" ? body.productName.trim() : undefined;
     if (!isin || typeof isin !== "string") {
       return NextResponse.json(
         { error: "Parameter 'isin' fehlt oder ist ungültig" },
@@ -12,7 +13,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const result = await runWorkflow(isin);
+    const result = await runWorkflow(isin, productName);
 
     if ("code" in result && "message" in result) {
       return NextResponse.json(

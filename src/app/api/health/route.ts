@@ -1,9 +1,13 @@
-import { prisma } from "@/lib/db";
+import { supabaseAdmin } from "@/lib/supabase";
 import { NextResponse } from "next/server";
 
 export async function GET() {
   try {
-    await prisma.isinCache.findFirst({ take: 1 });
+    const { error } = await supabaseAdmin!
+      .from("IsinCache")
+      .select("id")
+      .limit(1);
+    if (error) throw new Error(error.message);
     return NextResponse.json({
       status: "ok",
       db: "connected",

@@ -28,9 +28,9 @@ const SINGLE_ASSET_TICKER_100 = /\(([A-Z]{2,10})\)\s+100\s*%?/;
 const SINGLE_ASSET_BITWISE_BACKED = /(?:fully|physically)\s+backed\s+by\s+(?:the\s+)?([A-Z]{2,10})\b/i;
 // Muster G: Bitwise – "100% XRP" / "100 % xrp" (Zusammensetzung: Gewicht zuerst)
 const SINGLE_ASSET_100_PERCENT_TICKER = /100\s*%\s+([A-Za-z]{2,10})\b/i;
-// Muster H: CoinShares KID – "Compass Crypto Reference Index Ethereum/Bitcoin/XRP"
+// Muster H: CoinShares KID – "Compass Crypto Reference Index Ethereum/Bitcoin/XRP/Cosmos"
 const SINGLE_ASSET_COINSHARES_INDEX =
-  /Compass\s+Crypto\s+Reference\s+Index\s+(Ethereum|Bitcoin|XRP|Solana|Cardano|Polkadot|Litecoin)/i;
+  /Compass\s+Crypto\s+Reference\s+Index\s+(Ethereum|Bitcoin|XRP|Solana|Cardano|Polkadot|Litecoin|Cosmos|ATOM|Tron|Sui)/i;
 
 // ─────────────────────────────────────────────
 // Stichtag-Muster (gilt für alle Anbieter)
@@ -388,6 +388,11 @@ function extractSingleAsset(text: string): ConstituentWeight[] {
       CARDANO: "ADA",
       POLKADOT: "DOT",
       LITECOIN: "LTC",
+      COSMOS: "ATOM",
+      ATOM: "ATOM",
+      TRON: "TRX",
+      TRX: "TRX",
+      SUI: "SUI",
     };
     const ticker = nameToTicker[asset];
     if (ticker) return [{ name: ticker, weight: 100 }];
@@ -502,9 +507,39 @@ function extractDdaConstituents(text: string): ConstituentWeight[] {
 // Allgemeine Extraktion (21Shares / unbekannt)
 // ─────────────────────────────────────────────
 
+// Vollständige Asset-Namen (gemischte Groß-/Kleinschreibung) nach "physically backed by"
+const COINSHARES_BACKED_BY_NAME_TO_TICKER: Record<string, string> = {
+  cosmos: "ATOM",
+  bitcoin: "BTC",
+  ethereum: "ETH",
+  xrp: "XRP",
+  solana: "SOL",
+  cardano: "ADA",
+  polkadot: "DOT",
+  litecoin: "LTC",
+  avalanche: "AVAX",
+  polygon: "MATIC",
+  chainlink: "LINK",
+  "near protocol": "NEAR",
+  toncoin: "TON",
+  tron: "TRX",
+  sui: "SUI",
+};
+
+const COINSHARES_BACKED_PATTERN =
+  /(?:100\s*%\s*)?physically\s+backed\s+by\s+(cosmos|bitcoin|ethereum|xrp|solana|cardano|polkadot|litecoin|avalanche|polygon|chainlink|near\s+protocol|toncoin|tron|sui)(?:\s*\([A-Z]{2,10}\))?/i;
+
 function extractCoinsharesConstituents(text: string): ConstituentWeight[] {
   const single = extractSingleAsset(text);
   if (single.length > 0) return single;
+
+  // Fallback: "physically backed by Cosmos" (gemischte Schreibweise, ohne Klammern)
+  const mBacked = text.match(COINSHARES_BACKED_PATTERN);
+  if (mBacked) {
+    const ticker = COINSHARES_BACKED_BY_NAME_TO_TICKER[mBacked[1].toLowerCase()];
+    if (ticker) return [{ name: ticker, weight: 100 }];
+  }
+
   return extractConstituentsFromBlock(extractRelevantSection(text, "coinshares"), false);
 }
 
@@ -546,6 +581,87 @@ function normalizeWeightsTo100(constituents: ConstituentWeight[]): ConstituentWe
   }));
 }
 
+// ─────────────────────────────────────────────
+// Full-Text Single-Coin Fallback
+// ─────────────────────────────────────────────
+
+/**
+ * Jeder Eintrag: [Regex-Pattern, kanonischer Ticker].
+ * Längere/spezifischere Muster stehen VOR kürzeren, damit z.B.
+ * "Bitcoin Cash" nicht als "Bitcoin" und "Cash" gezählt wird.
+ * Full-Names sind case-insensitive; Ticker-Patterns case-sensitive (Großbuchstaben).
+ */
+const FULL_TEXT_COIN_MAP: Array<[RegExp, string]> = [
+  [/\bbitcoin\s+cash\b/i,     "BCH"],
+  [/\bnear\s+protocol\b/i,    "NEAR"],
+  [/\binternet\s+computer\b/i,"ICP"],
+  [/\bbitcoin\b/i,            "BTC"],
+  [/\bBTC\b/,                 "BTC"],
+  [/\bethereum\b/i,           "ETH"],
+  [/\bETH\b/,                 "ETH"],
+  [/\bcosmos\b/i,             "ATOM"],
+  [/\bATOM\b/,                "ATOM"],
+  [/\bripple\b/i,             "XRP"],
+  [/\bXRP\b/,                 "XRP"],
+  [/\bsolana\b/i,             "SOL"],
+  [/\bSOL\b/,                 "SOL"],
+  [/\bcardano\b/i,            "ADA"],
+  [/\bADA\b/,                 "ADA"],
+  [/\bpolkadot\b/i,           "DOT"],
+  [/\bDOT\b/,                 "DOT"],
+  [/\blitecoin\b/i,           "LTC"],
+  [/\bLTC\b/,                 "LTC"],
+  [/\bavalanche\b/i,          "AVAX"],
+  [/\bAVAX\b/,                "AVAX"],
+  [/\bpolygon\b/i,            "MATIC"],
+  [/\bMATIC\b/,               "MATIC"],
+  [/\bchainlink\b/i,          "LINK"],
+  [/\bLINK\b/,                "LINK"],
+  [/\bdogecoin\b/i,           "DOGE"],
+  [/\bDOGE\b/,                "DOGE"],
+  [/\btoncoin\b/i,            "TON"],
+  [/\bhedera\b/i,             "HBAR"],
+  [/\bHBAR\b/,                "HBAR"],
+  [/\balgorand\b/i,           "ALGO"],
+  [/\bALGO\b/,                "ALGO"],
+  [/\bstellar\b/i,            "XLM"],
+  [/\bXLM\b/,                 "XLM"],
+  [/\baptos\b/i,              "APT"],
+  [/\bAPT\b/,                 "APT"],
+  [/\bfilecoin\b/i,           "FIL"],
+  [/\bFIL\b/,                 "FIL"],
+  [/\binjective\b/i,          "INJ"],
+  [/\bINJ\b/,                 "INJ"],
+  [/\bcelestia\b/i,           "TIA"],
+  [/\bTIA\b/,                 "TIA"],
+  [/\bnear\b/i,               "NEAR"],
+  [/\bNEAR\b/,                "NEAR"],
+  [/\bsui\b/i,                "SUI"],
+  [/\bSUI\b/,                 "SUI"],
+  [/\btron\b/i,               "TRX"],
+  [/\bTRX\b/,                 "TRX"],
+  [/\baave\b/i,               "AAVE"],
+  [/\bAAVE\b/,                "AAVE"],
+];
+
+/**
+ * Scannt den gesamten Factsheet-Text nach bekannten Coin-Namen/-Tickern.
+ * Wird genau EIN einziger Coin erkannt → 100% zugewiesen.
+ * Bei mehreren Coins (Multi-Asset) wird [] zurückgegeben.
+ */
+function extractSingleCoinFromFullText(text: string): ConstituentWeight[] {
+  const foundTickers = new Set<string>();
+  for (const [pattern, ticker] of FULL_TEXT_COIN_MAP) {
+    if (pattern.test(text)) {
+      foundTickers.add(ticker);
+    }
+  }
+  if (foundTickers.size === 1) {
+    return [{ name: [...foundTickers][0], weight: 100 }];
+  }
+  return [];
+}
+
 export function parseFactsheetText(
   text: string,
   provider: Provider = "unknown"
@@ -553,5 +669,16 @@ export function parseFactsheetText(
   const asOfDate = extractAsOfDate(text);
   let constituents = extractConstituents(text, provider);
   constituents = normalizeWeightsTo100(constituents);
+
+  // Finaler Fallback: wenn kein gültiges Ergebnis → gesamten Text nach
+  // genau einem Coin scannen und direkt 100% zuweisen.
+  const sum = constituents.reduce((s, c) => s + c.weight, 0);
+  if (constituents.length === 0 || sum < WEIGHT_SUM_MIN || sum > WEIGHT_SUM_MAX) {
+    const singleFromText = extractSingleCoinFromFullText(text);
+    if (singleFromText.length > 0) {
+      constituents = singleFromText;
+    }
+  }
+
   return { asOfDate, constituents };
 }
