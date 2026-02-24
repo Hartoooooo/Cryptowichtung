@@ -237,6 +237,8 @@ export default function AuswertungPage() {
   const [matched, setMatched] = useState<MatchedRow[]>([]);
   const [notFound, setNotFound] = useState<string[]>([]);
   const [allocations, setAllocations] = useState<CryptoAllocation[]>([]);
+  const [prices, setPrices] = useState<Record<string, number>>({});
+  const [pricesLoading, setPricesLoading] = useState(false);
 
   useEffect(() => {
     fetch("/api/weight-results")
@@ -268,9 +270,23 @@ export default function AuswertungPage() {
         }
       }
 
+      const built = buildAllocations(matchedRows);
       setMatched(matchedRows);
       setNotFound(missing);
-      setAllocations(buildAllocations(matchedRows));
+      setAllocations(built);
+
+      // Preise abrufen für alle gefundenen Coins
+      if (built.length > 0) {
+        const symbols = built.map((a) => a.name).join(",");
+        setPricesLoading(true);
+        fetch(`/api/coinprices?symbols=${encodeURIComponent(symbols)}`)
+          .then((r) => r.json())
+          .then((data) => {
+            if (!data.error) setPrices(data);
+          })
+          .catch(() => {})
+          .finally(() => setPricesLoading(false));
+      }
     },
     [dbEntries]
   );
@@ -351,7 +367,10 @@ export default function AuswertungPage() {
           <div className="mb-8 rounded-2xl border border-neutral-800 bg-neutral-900/50 overflow-hidden">
             <div className="px-5 py-3 border-b border-neutral-800 flex justify-between items-center">
               <span className="text-sm text-neutral-400">Crypto-Allokation</span>
-              <span className="text-sm text-neutral-500">
+              <span className="text-sm text-neutral-500 flex items-center gap-2">
+                {pricesLoading && (
+                  <span className="text-xs text-neutral-600">Kurse laden…</span>
+                )}
                 Total:{" "}
                 <span className="text-neutral-200 tabular-nums">{formatAmount(totalAllocated)}</span>
               </span>
@@ -371,16 +390,41 @@ export default function AuswertungPage() {
                 })}
               </div>
             </div>
+            {/* Tabellen-Header */}
+            <div className="grid grid-cols-[auto_1fr_repeat(4,auto)] items-center gap-x-4 px-5 py-2 border-b border-neutral-800 text-xs text-neutral-500">
+              <span className="w-2.5" />
+              <span>Coin</span>
+              <span className="text-right w-28">Kurs (USD)</span>
+              <span className="text-right w-32">Gesamt</span>
+              <span className="text-right w-28">Anzahl</span>
+              <span className="text-right w-14">Anteil</span>
+            </div>
             <div className="divide-y divide-neutral-800">
               {allocations.map((alloc, idx) => {
                 const pct = totalAllocated > 0 ? (alloc.totalAmount / totalAllocated) * 100 : 0;
                 const colors = ["#f59e0b","#22d3ee","#a78bfa","#34d399","#f472b6","#fb923c","#60a5fa","#4ade80"];
+                const priceUsd = prices[alloc.name.toUpperCase()] ?? null;
+                const coinCount = priceUsd && priceUsd > 0 ? alloc.totalAmount / priceUsd : null;
                 return (
-                  <div key={alloc.name} className="flex items-center gap-3 px-5 py-2.5 hover:bg-neutral-800/20">
+                  <div key={alloc.name} className="grid grid-cols-[auto_1fr_repeat(4,auto)] items-center gap-x-4 px-5 py-2.5 hover:bg-neutral-800/20">
                     <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: colors[idx % colors.length] }} />
-                    <span className="flex-1 text-sm text-neutral-200">{alloc.name}</span>
-                    <span className="tabular-nums text-sm text-amber-400">{formatAmount(alloc.totalAmount)}</span>
-                    <span className="tabular-nums text-sm text-neutral-500 w-16 text-right">{pct.toFixed(2)}%</span>
+                    <span className="text-sm text-neutral-200">{alloc.name}</span>
+                    <span className="tabular-nums text-sm text-neutral-400 text-right w-28">
+                      {priceUsd != null
+                        ? `$${priceUsd >= 1
+                            ? priceUsd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                            : priceUsd.toFixed(4)}`
+                        : pricesLoading ? "…" : "—"}
+                    </span>
+                    <span className="tabular-nums text-sm text-amber-400 text-right w-32">{formatAmount(alloc.totalAmount)}</span>
+                    <span className="tabular-nums text-sm text-emerald-400 text-right w-28">
+                      {coinCount != null
+                        ? coinCount >= 0.01
+                          ? coinCount.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })
+                          : coinCount.toFixed(8)
+                        : pricesLoading ? "…" : "—"}
+                    </span>
+                    <span className="tabular-nums text-sm text-neutral-500 text-right w-14">{pct.toFixed(2)}%</span>
                   </div>
                 );
               })}
