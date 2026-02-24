@@ -40,8 +40,71 @@ type Provider = "21shares" | "vaneck" | "bitwise" | "dda" | "coinshares" | "wisd
 interface MappingEntry {
   provider?: string;
   ticker?: string;
+  name?: string;
   productPageUrl?: string;
   factsheetUrl?: string | null;
+}
+
+// ─────────────────────────────────────────────
+// Coin-Name-Erkennung aus Produktnamen
+// ─────────────────────────────────────────────
+
+/**
+ * Längere/zusammengesetzte Namen müssen vor kürzeren stehen,
+ * damit "Bitcoin Cash" nicht als "Bitcoin" gezählt wird.
+ */
+const COIN_NAME_PATTERNS: Array<{ names: string[]; ticker: string }> = [
+  { names: ["bitcoin cash"], ticker: "BCH" },
+  { names: ["near protocol"], ticker: "NEAR" },
+  { names: ["binance coin"], ticker: "BNB" },
+  { names: ["bitcoin"], ticker: "BTC" },
+  { names: ["ethereum"], ticker: "ETH" },
+  { names: ["ripple", "xrp"], ticker: "XRP" },
+  { names: ["solana"], ticker: "SOL" },
+  { names: ["cardano"], ticker: "ADA" },
+  { names: ["polkadot"], ticker: "DOT" },
+  { names: ["litecoin"], ticker: "LTC" },
+  { names: ["avalanche"], ticker: "AVAX" },
+  { names: ["polygon"], ticker: "MATIC" },
+  { names: ["chainlink"], ticker: "LINK" },
+  { names: ["uniswap"], ticker: "UNI" },
+  { names: ["aptos"], ticker: "APT" },
+  { names: ["injective"], ticker: "INJ" },
+  { names: ["celestia"], ticker: "TIA" },
+  { names: ["filecoin"], ticker: "FIL" },
+  { names: ["hedera"], ticker: "HBAR" },
+  { names: ["algorand"], ticker: "ALGO" },
+  { names: ["stellar"], ticker: "XLM" },
+  { names: ["toncoin"], ticker: "TON" },
+  { names: ["dogecoin"], ticker: "DOGE" },
+  { names: ["gold"], ticker: "GOLD" },
+  { names: ["silver"], ticker: "SILVER" },
+];
+
+/**
+ * Durchsucht einen Produktnamen nach bekannten Coin-/Asset-Namen.
+ * Gibt den Ticker zurück wenn exakt 1 Asset gefunden wurde, sonst null.
+ * Längere Muster werden zuerst geprüft und aus dem String entfernt,
+ * um Doppel-Matches (z.B. "Bitcoin Cash" → BTC + BCH) zu verhindern.
+ */
+function extractSingleCoinFromName(productName: string): string | null {
+  let nameLower = productName.toLowerCase();
+  const foundTickers: string[] = [];
+
+  for (const { names, ticker } of COIN_NAME_PATTERNS) {
+    for (const coinName of names) {
+      const escaped = coinName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const re = new RegExp(`\\b${escaped}\\b`, "i");
+      if (re.test(nameLower)) {
+        foundTickers.push(ticker);
+        nameLower = nameLower.replace(re, "___");
+        break;
+      }
+    }
+  }
+
+  const unique = new Set(foundTickers);
+  return unique.size === 1 ? [...unique][0] : null;
 }
 
 const mapping = mappingData as Record<string, MappingEntry>;
@@ -351,6 +414,7 @@ function detectProviderFromUrl(url: string): Provider {
 interface JustEtfDiscoveryWithPdf {
   provider: Provider;
   factsheetUrl: string;
+  productTitle?: string;
   constituents?: undefined;
   sourceUrl?: undefined;
 }
@@ -485,7 +549,7 @@ async function discoverFromJustEtf(isin: string): Promise<JustEtfDiscovery | nul
         const headRes = await fetch(pdfUrl, { method: "HEAD", headers: { "User-Agent": USER_AGENT } });
         if (headRes.ok) {
           const provider = detectProviderFromUrl(pdfUrl);
-          return { provider, factsheetUrl: pdfUrl };
+          return { provider, factsheetUrl: pdfUrl, productTitle };
         }
       } catch {
         /* PDF nicht erreichbar */
@@ -501,7 +565,7 @@ async function discoverFromJustEtf(isin: string): Promise<JustEtfDiscovery | nul
       const kidUrl = `https://www.vaneck.com/globalassets/home/ucits/documents/kids/KID_VanEck-${slug}-ETN_en-CH.pdf`;
       validateUrlForFetch(kidUrl);
       const headRes = await fetch(kidUrl, { method: "HEAD", headers: { "User-Agent": USER_AGENT } });
-      if (headRes.ok) return { provider: "vaneck", factsheetUrl: kidUrl };
+      if (headRes.ok) return { provider: "vaneck", factsheetUrl: kidUrl, productTitle };
     }
 
     // Bitwise/ETC Group: "Bitwise Physical Bitcoin ETP" → fact-sheet-bitwise-physical-bitcoin-etp.pdf
@@ -516,7 +580,7 @@ async function discoverFromJustEtf(isin: string): Promise<JustEtfDiscovery | nul
         validateUrlForFetch(fsUrl);
         try {
           const headRes = await fetch(fsUrl, { method: "HEAD", headers: { "User-Agent": USER_AGENT } });
-          if (headRes.ok) return { provider: "bitwise", factsheetUrl: fsUrl };
+          if (headRes.ok) return { provider: "bitwise", factsheetUrl: fsUrl, productTitle };
         } catch {
           continue;
         }
@@ -529,7 +593,7 @@ async function discoverFromJustEtf(isin: string): Promise<JustEtfDiscovery | nul
       validateUrlForFetch(kidUrl);
       try {
         const headRes = await fetch(kidUrl, { method: "HEAD", headers: { "User-Agent": USER_AGENT } });
-        if (headRes.ok) return { provider: "coinshares", factsheetUrl: kidUrl };
+        if (headRes.ok) return { provider: "coinshares", factsheetUrl: kidUrl, productTitle };
       } catch {
         /* KID nicht erreichbar */
       }
@@ -548,7 +612,7 @@ async function discoverFromJustEtf(isin: string): Promise<JustEtfDiscovery | nul
           const fsUrl = `https://deutschedigitalassets.com/wp-content/uploads/product_uploads/funds/etps/${slug}/Germany/Featured/${slug}_Factsheet-de.pdf`;
           validateUrlForFetch(fsUrl);
           const headRes = await fetch(fsUrl, { method: "HEAD", headers: { "User-Agent": USER_AGENT } });
-          if (headRes.ok) return { provider: "dda", factsheetUrl: fsUrl };
+          if (headRes.ok) return { provider: "dda", factsheetUrl: fsUrl, productTitle };
         }
       }
     }
@@ -571,7 +635,7 @@ async function discoverFromJustEtf(isin: string): Promise<JustEtfDiscovery | nul
 // ─────────────────────────────────────────────
 
 type ResolveResult =
-  | { url: string; provider: Provider; constituents?: undefined; sourceUrl?: undefined }
+  | { url: string; provider: Provider; productName?: string; constituents?: undefined; sourceUrl?: undefined }
   | { url?: undefined; provider: "justetf"; constituents: ConstituentWeight[]; sourceUrl: string };
 
 async function resolveFactsheetUrl(isin: string): Promise<ResolveResult> {
@@ -581,7 +645,7 @@ async function resolveFactsheetUrl(isin: string): Promise<ResolveResult> {
   // 1. Direkter Factsheet-URL aus Mapping (für alle Anbieter)
   if (entry?.factsheetUrl) {
     validateUrlForFetch(entry.factsheetUrl);
-    return { url: entry.factsheetUrl, provider: providerFromMapping };
+    return { url: entry.factsheetUrl, provider: providerFromMapping, productName: entry.name };
   }
 
   // 2. Anbieter-spezifische Discovery über Produktseite (wenn Mapping vorhanden)
@@ -598,14 +662,14 @@ async function resolveFactsheetUrl(isin: string): Promise<ResolveResult> {
       discovered = await discoverFactsheetFrom21SharesProductPage(entry.productPageUrl);
     }
 
-    if (discovered) return { url: discovered, provider: providerFromMapping };
+    if (discovered) return { url: discovered, provider: providerFromMapping, productName: entry.name };
   }
 
   // 3. JustETF Discovery – für beliebige ISINs ohne Vor-Mapping
   const justEtf = await discoverFromJustEtf(isin);
   if (justEtf) {
     if ("factsheetUrl" in justEtf && justEtf.factsheetUrl) {
-      return { url: justEtf.factsheetUrl, provider: justEtf.provider };
+      return { url: justEtf.factsheetUrl, provider: justEtf.provider, productName: justEtf.productTitle };
     }
     if ("constituents" in justEtf && justEtf.constituents) {
       return { provider: "justetf", constituents: justEtf.constituents, sourceUrl: justEtf.sourceUrl };
@@ -694,6 +758,7 @@ export async function runWorkflow(isin: string): Promise<WeightsResult | Workflo
   let sourcePdfUrl: string;
   let detectedProvider: Provider;
   let justEtfConstituents: ConstituentWeight[] | null = null;
+  let productName: string | undefined;
   try {
     const resolved = await resolveFactsheetUrl(normalizedIsin);
     detectedProvider = resolved.provider;
@@ -702,6 +767,7 @@ export async function runWorkflow(isin: string): Promise<WeightsResult | Workflo
       sourcePdfUrl = resolved.sourceUrl;
     } else {
       sourcePdfUrl = resolved.url;
+      productName = resolved.productName;
     }
   } catch (e) {
     await prisma.fetchLog.create({
@@ -760,6 +826,55 @@ export async function runWorkflow(isin: string): Promise<WeightsResult | Workflo
       cacheStatus: "MISS",
       fetchedAt: now.toISOString(),
     };
+  }
+
+  // Single-Coin-Optimierung: wenn Produktname bekannt und genau 1 Asset darin vorkommt,
+  // Factsheet-Download überspringen und diesen Coin direkt als 100% verwenden.
+  if (productName) {
+    const singleCoin = extractSingleCoinFromName(productName);
+    if (singleCoin) {
+      const singleCoinConstituents: ConstituentWeight[] = [{ name: singleCoin, weight: 100 }];
+      const navTicker = extractTickerFromFactsheetUrl(sourcePdfUrl);
+      const navUsd = navTicker ? await fetchNavFromApi(navTicker).catch(() => null) : null;
+      const expiresAt = new Date(now.getTime() + CACHE_TTL_SUCCESS_MS);
+      await prisma.isinCache.upsert({
+        where: { isin: normalizedIsin },
+        create: {
+          isin: normalizedIsin,
+          sourcePdfUrl,
+          asOfDate: null,
+          weightsJson: JSON.stringify(singleCoinConstituents),
+          fetchedAt: now,
+          expiresAt,
+          parseVersion: PARSE_VERSION,
+          sha256Pdf: null,
+        },
+        update: {
+          sourcePdfUrl,
+          weightsJson: JSON.stringify(singleCoinConstituents),
+          fetchedAt: now,
+          expiresAt,
+        },
+      });
+      await prisma.fetchLog.create({
+        data: {
+          isin: normalizedIsin,
+          attemptAt: now,
+          status: "success",
+          message: `Single-Asset aus Produktname: ${singleCoin} 100% (${productName})`,
+          sourceUrl: sourcePdfUrl,
+        },
+      });
+      return {
+        isin: normalizedIsin,
+        asOfDate: null,
+        constituents: singleCoinConstituents,
+        navUsd,
+        sourcePdfUrl,
+        cacheStatus: "MISS",
+        fetchedAt: now.toISOString(),
+      };
+    }
   }
 
   let buffer: Buffer;
