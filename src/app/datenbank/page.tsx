@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
-import { PieChart, Pie, Cell, ResponsiveContainer, Legend } from "recharts";
 
 interface ConstituentWeight {
   name: string;
@@ -72,12 +71,24 @@ const CHART_COLORS = [
   "#4ade80",
 ];
 
+const ISIN_REGEX = /^[A-Z]{2}[A-Z0-9]{9}[0-9]$/;
+
 export default function DatenbankPage() {
   const [data, setData] = useState<WeightResult[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<WeightResult | null>(null);
-  const [priceCache, setPriceCache] = useState<Record<string, number>>({});
+  const [prices, setPrices] = useState<Record<string, number>>({});
+  const [searchIsin, setSearchIsin] = useState("");
+  const [searchResult, setSearchResult] = useState<WeightResult | "not_found" | null>(null);
+
+  const sortedData = useMemo(
+    () =>
+      [...data].sort(
+        (a, b) => (b.constituents?.length ?? 0) - (a.constituents?.length ?? 0)
+      ),
+    [data]
+  );
 
   const coinGeckoIds = useMemo(() => {
     if (!selected) return [];
@@ -89,10 +100,6 @@ export default function DatenbankPage() {
     return Array.from(ids);
   }, [selected]);
 
-  const idsToFetch = useMemo(() => {
-    return coinGeckoIds.filter((id) => !(id in priceCache));
-  }, [coinGeckoIds, priceCache]);
-
   useEffect(() => {
     fetch("/api/weight-results")
       .then((res) => res.json())
@@ -103,27 +110,52 @@ export default function DatenbankPage() {
         }
         const items = Array.isArray(result) ? result : [];
         setData(items);
-        if (items.length > 0) setSelected(items[0]);
+        const sorted = [...items].sort(
+          (a, b) => (b.constituents?.length ?? 0) - (a.constituents?.length ?? 0)
+        );
+        if (sorted.length > 0) setSelected(sorted[0]);
       })
       .catch(() => setError("Fehler beim Laden"))
       .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
-    if (idsToFetch.length === 0) return;
-    const ids = idsToFetch.join(",");
+    if (coinGeckoIds.length === 0) {
+      setPrices({});
+      return;
+    }
+    const ids = coinGeckoIds.join(",");
     fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`)
       .then((res) => res.json())
       .then((data) => {
-        const newPrices: Record<string, number> = {};
+        const out: Record<string, number> = {};
         for (const [id, obj] of Object.entries(data)) {
           const usd = (obj as { usd?: number }).usd;
-          if (typeof usd === "number") newPrices[id] = usd;
+          if (typeof usd === "number") out[id] = usd;
         }
-        setPriceCache((prev) => ({ ...prev, ...newPrices }));
+        setPrices(out);
       })
-      .catch(() => {});
-  }, [idsToFetch.join(",")]);
+      .catch(() => setPrices({}));
+  }, [coinGeckoIds.join(",")]);
+
+  const handleSearch = () => {
+    const normalized = searchIsin.trim().toUpperCase().replace(/\s/g, "");
+    if (!normalized) {
+      setSearchResult(null);
+      return;
+    }
+    if (!ISIN_REGEX.test(normalized)) {
+      setSearchResult("not_found");
+      return;
+    }
+    const match = data.find((d) => d.isin.toUpperCase() === normalized);
+    if (match) {
+      setSearchResult(match);
+      setSelected(match);
+    } else {
+      setSearchResult("not_found");
+    }
+  };
 
   if (loading) {
     return (
@@ -137,7 +169,7 @@ export default function DatenbankPage() {
     <div className="min-h-screen bg-neutral-950 text-neutral-100 font-sans antialiased">
       <div className="mx-auto max-w-5xl px-6 py-12">
         <div className="flex justify-between items-center mb-8">
-          <h1 className="text-2xl tracking-tight">Datenbank & Kreisdiagramm</h1>
+          <h1 className="text-2xl tracking-tight">Datenbank & Gewichtung</h1>
           <Link
             href="/"
             className="text-amber-400 hover:text-amber-300 text-sm"
@@ -160,13 +192,44 @@ export default function DatenbankPage() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             {/* Liste */}
             <div className="lg:col-span-1 rounded-2xl border border-neutral-800 bg-neutral-900/50 overflow-hidden">
-              <div className="px-4 py-3 border-b border-neutral-800">
-                <span className="text-sm text-neutral-400">
-                  {data.length} Einträge
+              <div className="px-4 py-3 border-b border-neutral-800 space-y-3">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={searchIsin}
+                    onChange={(e) => {
+                      setSearchIsin(e.target.value.toUpperCase());
+                      setSearchResult(null);
+                    }}
+                    onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+                    placeholder="ISIN suchen..."
+                    className="flex-1 rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-neutral-200 placeholder-neutral-500 focus:border-amber-500 focus:outline-none"
+                    maxLength={12}
+                  />
+                  <button
+                    onClick={handleSearch}
+                    className="rounded-lg bg-amber-500 px-3 py-2 text-sm text-neutral-950 font-medium hover:bg-amber-400 shrink-0"
+                  >
+                    Suchen
+                  </button>
+                </div>
+                {searchResult === "not_found" && (
+                  <p className="text-xs text-amber-400">Nicht in der Datenbank</p>
+                )}
+                {searchResult && searchResult !== "not_found" && (
+                  <p className="text-xs text-emerald-400">Gefunden</p>
+                )}
+                <span className="text-sm text-neutral-400 block">
+                  {data.length} Einträge (nach Konst. sortiert)
                 </span>
               </div>
-              <div className="max-h-[400px] overflow-y-auto">
-                {data.map((item) => (
+              <div
+                className="overflow-y-auto transition-[max-height] duration-200"
+                style={{
+                  maxHeight: `${52 * (1 + (selected?.constituents?.length ?? 1))}px`,
+                }}
+              >
+                {sortedData.map((item) => (
                   <button
                     key={item.id}
                     onClick={() => setSelected(item)}
@@ -174,9 +237,14 @@ export default function DatenbankPage() {
                       selected?.id === item.id ? "bg-amber-500/10 border-l-2 border-l-amber-500" : ""
                     }`}
                   >
-                    <p className="font-mono text-sm text-neutral-200 truncate">
-                      {item.isin}
-                    </p>
+                    <div className="flex justify-between items-center gap-2">
+                      <p className="font-mono text-sm text-neutral-200 truncate">
+                        {item.isin}
+                      </p>
+                      <span className="text-xs text-neutral-500 shrink-0">
+                        {item.constituents?.length ?? 0} Konst.
+                      </span>
+                    </div>
                     <p className="text-xs text-neutral-500 truncate mt-0.5">
                       {item.name}
                     </p>
@@ -185,7 +253,7 @@ export default function DatenbankPage() {
               </div>
             </div>
 
-            {/* Kreisdiagramm + Details */}
+            {/* Gewichtungs-Balken + Details */}
             <div className="lg:col-span-2 space-y-6">
               {selected && (
                 <>
@@ -193,35 +261,24 @@ export default function DatenbankPage() {
                     <h2 className="text-lg font-medium text-neutral-100 mb-1">
                       {selected.name}
                     </h2>
-                    <p className="font-mono text-sm text-neutral-500 mb-6">
+                    <p className="font-mono text-sm text-neutral-500 mb-4">
                       {selected.isin}
                     </p>
-                    <div className="h-80">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
-                          <Pie
-                            data={selected.constituents}
-                            dataKey="weight"
-                            nameKey="name"
-                            cx="50%"
-                            cy="50%"
-                            outerRadius="80%"
-                            label={(entry) => {
-                              const w = entry?.value as number;
-                              const n = entry?.name as string;
-                              return w >= 5 ? `${n} ${w.toFixed(0)}%` : "";
+                    <div className="h-8 rounded-lg overflow-hidden flex">
+                      {selected.constituents
+                        .sort((a, b) => b.weight - a.weight)
+                        .map((c, i) => (
+                          <div
+                            key={i}
+                            className="transition-all"
+                            style={{
+                              width: `${c.weight}%`,
+                              backgroundColor:
+                                CHART_COLORS[i % CHART_COLORS.length],
                             }}
-                          >
-                            {selected.constituents.map((_, i) => (
-                              <Cell
-                                key={i}
-                                fill={CHART_COLORS[i % CHART_COLORS.length]}
-                              />
-                            ))}
-                          </Pie>
-                          <Legend />
-                        </PieChart>
-                      </ResponsiveContainer>
+                            title={`${c.name} ${c.weight.toFixed(1)}%`}
+                          />
+                        ))}
                     </div>
                   </div>
 
@@ -237,7 +294,7 @@ export default function DatenbankPage() {
                         .sort((a, b) => b.weight - a.weight)
                         .map((c, i) => {
                           const geckoId = COINGECKO_IDS[c.name];
-                          const usd = geckoId ? priceCache[geckoId] : null;
+                          const usd = geckoId ? prices[geckoId] : null;
                           return (
                             <li
                               key={i}
