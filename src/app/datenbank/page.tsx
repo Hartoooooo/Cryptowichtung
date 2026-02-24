@@ -1,8 +1,6 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
-import Link from "next/link";
-
 interface ConstituentWeight {
   name: string;
   weight: number;
@@ -167,17 +165,9 @@ export default function DatenbankPage() {
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 font-sans antialiased">
-      <div className="mx-auto max-w-5xl px-6 py-12">
-        <div className="flex justify-between items-center mb-8">
+      <div className="mx-auto max-w-7xl px-6 py-12">
+        <div className="mb-8">
           <h1 className="text-2xl tracking-tight">Datenbank & Gewichtung</h1>
-          <div className="flex gap-4 text-sm">
-            <Link href="/auswertung" className="text-amber-400 hover:text-amber-300">
-              Auswertung
-            </Link>
-            <Link href="/" className="text-amber-400 hover:text-amber-300">
-              ← Zurück
-            </Link>
-          </div>
         </div>
 
         {error && (

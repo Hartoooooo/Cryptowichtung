@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import Link from "next/link";
 import * as XLSX from "xlsx";
 
 interface ConstituentWeight {
@@ -104,42 +103,11 @@ function parseExcelFile(file: File): Promise<ExcelRow[]> {
 }
 
 export default function Home() {
-  const [isin, setIsin] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<WeightsResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [sortDesc, setSortDesc] = useState(true);
 
   const [rows, setRows] = useState<ExcelRow[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [verifyLoading, setVerifyLoading] = useState(false);
-
-  const handleFetch = useCallback(async () => {
-    if (!isin.trim()) {
-      setError("Bitte eine ISIN eingeben.");
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    setResult(null);
-    try {
-      const res = await fetch("/api/weights", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ isin: isin.trim() }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || "Fehler beim Abruf");
-        return;
-      }
-      setResult(data);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Netzwerkfehler");
-    } finally {
-      setLoading(false);
-    }
-  }, [isin]);
 
   const handleFile = useCallback(async (file: File) => {
     if (
@@ -237,37 +205,16 @@ export default function Home() {
     setVerifyLoading(false);
   }, [rows]);
 
-  const handleCopyJson = useCallback(() => {
-    if (!result) return;
-    navigator.clipboard.writeText(JSON.stringify(result, null, 2));
-  }, [result]);
-
-  const sortedConstituents = result
-    ? [...result.constituents].sort((a, b) =>
-        sortDesc ? b.weight - a.weight : a.weight - b.weight
-      )
-    : [];
-
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 font-sans antialiased">
-      <div className="mx-auto max-w-3xl px-6 py-12">
-        <div className="flex justify-between items-center mb-8">
-          <div>
-            <h1 className="text-2xl tracking-tight text-neutral-100 mb-2">
-              Coinwichtung
-            </h1>
-            <p className="text-neutral-400 text-sm">
-              Konstituenten-Gewichte aus Factsheet-PDFs (21Shares, VanEck, Bitwise, DDA)
-            </p>
-          </div>
-          <div className="flex gap-4 text-sm shrink-0">
-            <Link href="/auswertung" className="text-amber-400 hover:text-amber-300">
-              Auswertung
-            </Link>
-            <Link href="/datenbank" className="text-amber-400 hover:text-amber-300">
-              Datenbank →
-            </Link>
-          </div>
+      <div className="mx-auto max-w-7xl px-6 py-12">
+        <div className="mb-8">
+          <h1 className="text-2xl tracking-tight text-neutral-100 mb-2">
+            Gewichtung
+          </h1>
+          <p className="text-neutral-400 text-sm">
+            Konstituenten-Gewichte aus Factsheet-PDFs (21Shares, VanEck, Bitwise, DDA)
+          </p>
         </div>
 
         {/* Excel Drag & Drop */}
@@ -393,27 +340,6 @@ export default function Home() {
           </div>
         )}
 
-        {/* Einzelabfrage */}
-        <div className="flex gap-3 mb-8">
-          <input
-            type="text"
-            value={isin}
-            onChange={(e) => setIsin(e.target.value.toUpperCase())}
-            onKeyDown={(e) => e.key === "Enter" && handleFetch()}
-            placeholder="ISIN (z.B. CH0445689208)"
-            maxLength={12}
-            className="flex-1 rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-3 text-neutral-100 placeholder-neutral-500 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 transition-colors"
-            disabled={loading}
-          />
-          <button
-            onClick={handleFetch}
-            disabled={loading}
-            className="rounded-xl bg-amber-500 px-6 py-3 text-neutral-950 transition-all hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
-          >
-            {loading ? "..." : "Abrufen"}
-          </button>
-        </div>
-
         {error && (
           <div
             role="alert"
@@ -423,78 +349,9 @@ export default function Home() {
           </div>
         )}
 
-        {result && (
-          <div className="space-y-4">
-            <div className="rounded-2xl border border-neutral-800 bg-neutral-900/50 p-5">
-              <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm mb-4">
-                {result.navUsd !== null && (
-                  <span className="text-neutral-100">
-                    NAV{" "}
-                    <span className="text-amber-400 tabular-nums">
-                      ${result.navUsd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </span>
-                  </span>
-                )}
-                <span className="text-neutral-400">
-                  Stichtag: {result.asOfDate ?? "—"}
-                </span>
-                <span className="text-neutral-400">
-                  Cache: {result.cacheStatus}
-                </span>
-                <span className="text-neutral-400">
-                  Abruf: {new Date(result.fetchedAt).toLocaleString("de-DE")}
-                </span>
-              </div>
-              <a
-                href={result.sourcePdfUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-amber-400 hover:text-amber-300 text-xs break-all"
-              >
-                {result.sourcePdfUrl}
-              </a>
-            </div>
-
-            <div className="rounded-2xl border border-neutral-800 bg-neutral-900/50 overflow-hidden">
-              <div className="flex justify-between items-center px-5 py-3 border-b border-neutral-800">
-                <span className="text-sm text-neutral-400">
-                  Konstituenten ({result.constituents.length})
-                </span>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setSortDesc(!sortDesc)}
-                    className="text-xs text-amber-400 hover:text-amber-300"
-                  >
-                    {sortDesc ? "↓ Gewicht" : "↑ Gewicht"}
-                  </button>
-                  <button
-                    onClick={handleCopyJson}
-                    className="text-xs text-amber-400 hover:text-amber-300"
-                  >
-                    JSON kopieren
-                  </button>
-                </div>
-              </div>
-              <ul className="divide-y divide-neutral-800">
-                {sortedConstituents.map((c, i) => (
-                  <li
-                    key={`${c.name}-${i}`}
-                    className="flex justify-between px-5 py-3 text-sm"
-                  >
-                    <span className="text-neutral-200">{c.name}</span>
-                    <span className="text-neutral-400 tabular-nums">
-                      {c.weight.toFixed(2)}%
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        )}
-
-        {!result && !error && !loading && rows.length === 0 && (
+        {!error && rows.length === 0 && (
           <p className="text-neutral-500 text-sm">
-            Excel-Datei per Drag & Drop einfügen oder ISIN eingeben. Beispiel:
+            Excel-Datei per Drag & Drop einfügen. Beispiel:
             CH0445689208 (21Shares Crypto Basket Index ETP)
           </p>
         )}

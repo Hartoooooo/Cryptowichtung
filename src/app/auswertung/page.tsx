@@ -1,8 +1,6 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
-import Link from "next/link";
-
 interface Constituent {
   name: string;
   weight: number;
@@ -339,25 +337,14 @@ export default function AuswertungPage() {
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 font-sans antialiased">
-      <div className="mx-auto max-w-5xl px-6 py-12">
-        {/* Header */}
-        <div className="flex justify-between items-center mb-8">
-          <div>
-            <h1 className="text-2xl tracking-tight text-neutral-100 mb-1">
-              Portfolio-Auswertung
-            </h1>
-            <p className="text-neutral-400 text-sm">
-              CSV hochladen → Beträge mit Crypto-Gewichtungen multiplizieren
-            </p>
-          </div>
-          <div className="flex gap-4 text-sm shrink-0">
-            <Link href="/datenbank" className="text-amber-400 hover:text-amber-300">
-              Datenbank
-            </Link>
-            <Link href="/" className="text-amber-400 hover:text-amber-300">
-              ← Zurück
-            </Link>
-          </div>
+      <div className="mx-auto max-w-7xl px-6 py-12">
+        <div className="mb-8">
+          <h1 className="text-2xl tracking-tight text-neutral-100 mb-1">
+            Portfolio-Auswertung
+          </h1>
+          <p className="text-neutral-400 text-sm">
+            CSV hochladen → Beträge mit Crypto-Gewichtungen multiplizieren
+          </p>
         </div>
 
         {dbError && (
