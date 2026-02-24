@@ -3,7 +3,7 @@
  * Unterstützte Anbieter: 21Shares, VanEck, Bitwise/ETC Group, DDA
  */
 
-export type Provider = "21shares" | "vaneck" | "bitwise" | "dda" | "coinshares" | "wisdomtree" | "unknown";
+export type Provider = "21shares" | "vaneck" | "bitwise" | "dda" | "coinshares" | "wisdomtree" | "justetf" | "unknown";
 
 // ─────────────────────────────────────────────
 // Single-Asset Muster
@@ -111,6 +111,14 @@ const SECTION_HEADERS_BY_PROVIDER: Record<Provider, string[]> = {
     "Underlying",
     "Holdings",
     "HOLDINGS",
+  ],
+  justetf: [
+    "ASSET ALLOCATION",
+    "Asset Allocation",
+    "INDEX COMPOSITION",
+    "Index Composition",
+    "Portfolio",
+    "Holdings",
   ],
   dda: [
     "Index Constituents",
