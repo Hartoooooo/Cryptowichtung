@@ -8,13 +8,12 @@
     "start": "next start",
     "lint": "eslint",
     "test": "jest",
-    "postinstall": "prisma generate"
+    "postinstall": "DATABASE_URL=${DATABASE_URL:-file:./prisma/dev.db} prisma generate"
   },
   "dependencies": {
     "@napi-rs/canvas": "^0.1.94",
     "@prisma/client": "^6.19.2",
     "@supabase/supabase-js": "^2.97.0",
-    "canvas": "^3.2.1",
     "next": "16.1.6",
     "pdf-parse": "^1.1.4",
     "pdf-to-img": "^5.0.0",
