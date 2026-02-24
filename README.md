@@ -15,18 +15,26 @@ Production-ready Webapp zur automatischen Ermittlung von Konstituenten-Gewichten
 npm install
 ```
 
-2. Umgebungsvariablen:
-
-Die Datei `.env` enthält die SQLite-Datenbank-URL. Standard:
+2. Umgebungsvariablen (`.env`):
 
 ```
-DATABASE_URL="file:./dev.db"
+# Supabase PostgreSQL (für Prisma: IsinCache, FetchLog)
+DATABASE_URL="postgresql://postgres.[PROJECT_REF]:[PASSWORD]@aws-0-eu-central-1.pooler.supabase.com:6543/postgres?pgbouncer=true"
+
+# Supabase (für weight_results)
+NEXT_PUBLIC_SUPABASE_URL="https://xxx.supabase.co"
+SUPABASE_SERVICE_ROLE_KEY="..."
 ```
 
-3. Prisma-Migration (bereits ausgeführt bei `npm install`):
+Connection string aus Supabase: Project Settings → Database → Connection string (URI, Transaction pooler).
+
+3. Supabase-Tabellen anlegen:
+
+- `weight_results`: `supabase-migration.sql` im Supabase SQL Editor ausführen
+- `IsinCache`/`FetchLog`: Prisma-Migration ausführen (nachdem DATABASE_URL gesetzt ist):
 
 ```bash
-npx prisma migrate dev
+npx prisma migrate deploy
 ```
 
 4. Entwicklungsserver starten:

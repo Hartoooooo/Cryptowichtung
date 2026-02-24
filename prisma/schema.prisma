@@ -1,11 +1,11 @@
-// Coinwichtung - SQLite für Cache und Audit Trail
+// Coinwichtung - PostgreSQL (Supabase) für Cache und Audit Trail
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 

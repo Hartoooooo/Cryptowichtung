@@ -1,5 +1,5 @@
--- In Supabase SQL Editor ausführen:
--- https://supabase.com/dashboard/project/ywxqivbcjwgxriuojvfi/sql
+-- In Supabase SQL Editor ausführen (nur weight_results – Prisma erstellt IsinCache/FetchLog automatisch):
+-- https://supabase.com/dashboard/project/DEIN_PROJECT/sql
 
 create table if not exists weight_results (
   id uuid primary key default gen_random_uuid(),

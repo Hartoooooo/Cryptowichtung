@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "jest",
-    "postinstall": "DATABASE_URL=${DATABASE_URL:-file:./prisma/dev.db} prisma generate"
+    "postinstall": "DATABASE_URL=${DATABASE_URL:-postgresql://placeholder:placeholder@localhost:5432/placeholder} prisma generate"
   },
   "dependencies": {
     "@napi-rs/canvas": "^0.1.94",
