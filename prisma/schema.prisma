@@ -1,0 +1,32 @@
+// Coinwichtung - SQLite für Cache und Audit Trail
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model IsinCache {
+  id           String   @id @default(cuid())
+  isin         String   @unique
+  sourcePdfUrl String
+  asOfDate     String?
+  weightsJson  String
+  fetchedAt    DateTime
+  expiresAt    DateTime
+  parseVersion Int      @default(1)
+  sha256Pdf    String?
+}
+
+model FetchLog {
+  id        String   @id @default(cuid())
+  isin      String
+  attemptAt DateTime
+  status    String // "success" | "error"
+  message   String?
+  httpStatus Int?
+  sourceUrl String?
+}

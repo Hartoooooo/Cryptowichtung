@@ -1,36 +1,89 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Coinwichtung
 
-## Getting Started
+Production-ready Webapp zur automatischen Ermittlung von Konstituenten-Gewichten für 21Shares-ETPs aus offiziellen Factsheet-PDFs.
 
-First, run the development server:
+## Voraussetzungen
+
+- Node.js 18+
+- npm
+
+## Setup
+
+1. Abhängigkeiten installieren:
+
+```bash
+npm install
+```
+
+2. Umgebungsvariablen:
+
+Die Datei `.env` enthält die SQLite-Datenbank-URL. Standard:
+
+```
+DATABASE_URL="file:./dev.db"
+```
+
+3. Prisma-Migration (bereits ausgeführt bei `npm install`):
+
+```bash
+npx prisma migrate dev
+```
+
+4. Entwicklungsserver starten:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Die App läuft unter [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Verwendung
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. ISIN eingeben (z.B. `CH0454664001` für 21Shares Bitcoin ETP oder `CH0445689208` für Crypto Basket Index)
+2. Auf "Abrufen" klicken
+3. Ergebnisse anzeigen: Stichtag, Konstituenten mit Gewichten, Cache-Status, Factsheet-URL
 
-## Learn More
+## API
 
-To learn more about Next.js, take a look at the following resources:
+### POST /api/weights
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Body: `{ "isin": "CH0445689208" }`
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Liefert die geparsten Gewichte, `asOfDate`, `sourcePdfUrl`, `cacheStatus` (HIT/MISS), `fetchedAt`.
 
-## Deploy on Vercel
+### GET /api/health
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Prüft DB-Verbindung und liefert Status.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Discovery (Crawling)
+
+Für unbekannte ISINs wird automatisch das offizielle Product-List-PDF von cdn.21shares.com geladen und die Factsheet-URL ermittelt. Kein manuelles Mapping erforderlich.
+
+## Mapping (optional)
+
+Überschreiben oder Vorab-Konfiguration in `src/data/isin-mapping.json`:
+
+```json
+{
+  "CH0445689208": {
+    "productPageUrl": "https://21shares.com/en-ch/product/hodl",
+    "factsheetUrl": "https://cdn.21shares.com/uploads/current-documents/factsheets/all/Factsheet_HODL.pdf"
+  }
+}
+```
+
+Mindestens `factsheetUrl` oder `productPageUrl` erforderlich.
+
+## Tests
+
+```bash
+npm test
+```
+
+## OCR-Fallback für Balkendiagramme
+
+Wenn die Asset Allocation nur als Balkendiagramm (Grafik) vorliegt, wird automatisch ein OCR-Fallback ausgeführt: PDF-Seiten werden gerendert, per Tesseract analysiert und der Text nach Gewichten durchsucht. Dafür werden `canvas` und `tesseract.js` benötigt. Die OCR-Ergebnisse werden nur übernommen, wenn die Gewichtssumme plausibel (90–110%) ist.
+
+## Lizenz
+
+Privat / Projektintern.
