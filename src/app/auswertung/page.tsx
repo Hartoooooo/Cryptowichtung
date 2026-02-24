@@ -275,9 +275,13 @@ export default function AuswertungPage() {
       setNotFound(missing);
       setAllocations(built);
 
-      // Preise abrufen für alle gefundenen Coins
+      // Preise abrufen für alle gefundenen Coins (XAU ausschließen)
+      const EXCLUDE_FROM_PRICE_API = new Set(["XAU"]);
       if (built.length > 0) {
-        const symbols = built.map((a) => a.name).join(",");
+        const symbols = built
+          .map((a) => a.name)
+          .filter((s) => !EXCLUDE_FROM_PRICE_API.has(s.toUpperCase()))
+          .join(",");
         setPricesLoading(true);
         fetch(`/api/coinprices?symbols=${encodeURIComponent(symbols)}`)
           .then((r) => r.json())
