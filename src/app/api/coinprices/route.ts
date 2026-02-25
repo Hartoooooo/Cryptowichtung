@@ -1,5 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 
+// Symbols that CoinMarketCap knows under a different ticker
+const CMC_SYMBOL_MAP: Record<string, string> = {
+  RNDR: "RENDER",
+  MATIC: "POL",
+};
+
+// Reverse: CMC symbol → original symbol
+const CMC_REVERSE_MAP: Record<string, string> = Object.fromEntries(
+  Object.entries(CMC_SYMBOL_MAP).map(([k, v]) => [v, k])
+);
+
 export async function GET(req: NextRequest) {
   const symbols = req.nextUrl.searchParams.get("symbols");
   if (!symbols) {
@@ -12,7 +23,9 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const url = `https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=${encodeURIComponent(symbols)}&convert=USD`;
+    const requestedSymbols = symbols.split(",").map((s) => s.trim().toUpperCase());
+    const cmcSymbols = requestedSymbols.map((s) => CMC_SYMBOL_MAP[s] ?? s);
+    const url = `https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=${encodeURIComponent(cmcSymbols.join(","))}&convert=USD`;
     const res = await fetch(url, {
       headers: {
         "X-CMC_PRO_API_KEY": apiKey,
@@ -35,7 +48,9 @@ export async function GET(req: NextRequest) {
         const e = entry as { quote?: { USD?: { price?: number } } };
         const price = e?.quote?.USD?.price;
         if (typeof price === "number") {
-          prices[symbol.toUpperCase()] = price;
+          const upperSymbol = symbol.toUpperCase();
+          const originalSymbol = CMC_REVERSE_MAP[upperSymbol] ?? upperSymbol;
+          prices[originalSymbol] = price;
         }
       }
     }

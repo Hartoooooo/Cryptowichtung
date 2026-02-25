@@ -167,6 +167,7 @@ const COIN_ALIASES: Record<string, string> = {
   // Polygon
   polygon: "MATIC",
   matic: "MATIC",
+  pol: "MATIC",
   // Uniswap
   uniswap: "UNI",
   // Litecoin
