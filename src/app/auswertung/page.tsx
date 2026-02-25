@@ -589,7 +589,7 @@ export default function AuswertungPage() {
                           <td className="px-5 py-3 font-mono text-neutral-200">
                             {row.isincod}
                           </td>
-                          <td className="px-5 py-3 text-neutral-400 font-mono text-xs">
+                          <td className="px-5 py-3 font-mono text-neutral-200">
                             {row.instmnem || "—"}
                           </td>
                           <td className="px-5 py-3 text-neutral-300 truncate max-w-[200px]">
