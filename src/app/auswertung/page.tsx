@@ -20,12 +20,14 @@ interface CsvRow {
   isincod: string;
   betrag: number;
   side: TradeSide;
+  instmnem: string;
 }
 
 interface MatchedRow {
   isincod: string;
   betrag: number;
   side: TradeSide;
+  instmnem: string;
   dbEntry: WeightResult;
 }
 
@@ -106,6 +108,10 @@ function parseCsvFile(file: File): Promise<CsvRow[]> {
           h === "ordrbuycod" || h === "ordr_buy_cod" || h === "ordrbuy" ||
           h === "side" || h === "buy/sell" || h === "buysell"
         );
+        const colInstmnem = headers.findIndex((h) =>
+          h === "instmnem" || h === "inst_mnem" || h === "instrument" ||
+          h === "ticker" || h === "symbol"
+        );
 
         if (colIsin < 0) {
           reject(new Error("Keine Spalte 'ISINCOD' gefunden. Bitte prüfe die CSV-Spaltenbezeichnungen."));
@@ -122,12 +128,13 @@ function parseCsvFile(file: File): Promise<CsvRow[]> {
           const isinRaw = (cells[colIsin] ?? "").trim().toUpperCase().replace(/\s/g, "");
           const betragRaw = cells[colBetrag] ?? "";
           const sideRaw = colSide >= 0 ? (cells[colSide] ?? "").trim().toUpperCase() : "B";
+          const instmnem = colInstmnem >= 0 ? (cells[colInstmnem] ?? "").trim() : "";
           if (!isinRaw) continue;
           if (!ISIN_REGEX.test(isinRaw)) continue;
           const betrag = parseBetrag(betragRaw);
           if (betrag === null || betrag === 0) continue;
           const side: TradeSide = sideRaw === "S" ? "S" : "B";
-          out.push({ isincod: isinRaw, betrag, side });
+          out.push({ isincod: isinRaw, betrag, side, instmnem });
         }
         resolve(out);
       } catch (err) {
@@ -256,6 +263,8 @@ export default function AuswertungPage() {
   const [allocations, setAllocations] = useState<CryptoAllocation[]>([]);
   const [prices, setPrices] = useState<Record<string, number>>({});
   const [pricesLoading, setPricesLoading] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [sideFilter, setSideFilter] = useState<"ALL" | "B" | "S">("ALL");
 
   useEffect(() => {
     fetch("/api/weight-results")
@@ -347,6 +356,19 @@ export default function AuswertungPage() {
     },
     [handleFile]
   );
+
+  const filteredMatched = matched.filter((row) => {
+    if (sideFilter !== "ALL" && row.side !== sideFilter) return false;
+    if (searchTerm) {
+      const q = searchTerm.toLowerCase();
+      if (
+        !row.isincod.toLowerCase().includes(q) &&
+        !row.instmnem.toLowerCase().includes(q) &&
+        !row.dbEntry.name.toLowerCase().includes(q)
+      ) return false;
+    }
+    return true;
+  });
 
   const totalBetrag = matched.reduce((s, r) => s + r.betrag, 0);
   const totalAllocated = allocations.reduce((s, a) => s + a.totalAmount, 0);
@@ -507,11 +529,41 @@ export default function AuswertungPage() {
 
         {matched.length > 0 && (
           <>
+            {/* Such- und Filterleiste */}
+            <div className="mb-4 flex flex-wrap items-center gap-3">
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Ticker, ISIN oder Produkt suchen…"
+                className="flex-1 min-w-[200px] rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-2.5 text-sm text-neutral-100 placeholder-neutral-500 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 transition-colors"
+              />
+              <div className="flex rounded-xl border border-neutral-700 overflow-hidden text-sm">
+                {(["ALL", "B", "S"] as const).map((val) => (
+                  <button
+                    key={val}
+                    onClick={() => setSideFilter(val)}
+                    className={`px-4 py-2.5 transition-colors ${
+                      sideFilter === val
+                        ? val === "B"
+                          ? "bg-emerald-500/20 text-emerald-400"
+                          : val === "S"
+                          ? "bg-red-500/20 text-red-400"
+                          : "bg-amber-500/20 text-amber-400"
+                        : "text-neutral-400 hover:bg-neutral-800"
+                    }`}
+                  >
+                    {val === "ALL" ? "Alle" : val === "B" ? "Buy" : "Sell"}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             {/* Matched ISINs Tabelle */}
             <div className="mb-8 rounded-2xl border border-neutral-800 bg-neutral-900/50 overflow-hidden">
               <div className="px-5 py-3 border-b border-neutral-800 flex justify-between items-center">
                 <span className="text-sm text-neutral-400">
-                  Gefundene Trades ({matched.length})
+                  Gefundene Trades ({filteredMatched.length}{filteredMatched.length !== matched.length ? ` / ${matched.length}` : ""})
                 </span>
                 <span className="text-sm text-neutral-500">
                   Gesamt: <span className="text-neutral-200 tabular-nums">{formatAmount(totalBetrag)}</span>
@@ -522,17 +574,21 @@ export default function AuswertungPage() {
                   <thead>
                     <tr className="text-left text-neutral-500 border-b border-neutral-800 bg-neutral-900">
                       <th className="px-5 py-3 font-normal">ISIN</th>
+                      <th className="px-5 py-3 font-normal">Ticker</th>
                       <th className="px-5 py-3 font-normal">Produkt</th>
                       <th className="px-5 py-3 font-normal text-center w-16">B/S</th>
                       <th className="px-5 py-3 font-normal text-right">Betrag</th>
                       <th className="px-5 py-3 font-normal text-right" colSpan={2}>Konstituenten</th>
                     </tr>
                   </thead>
-                  {matched.map((row, idx) => (
+                  {filteredMatched.map((row, idx) => (
                       <tbody key={`${row.isincod}-${idx}`}>
                         <tr className="border-b border-neutral-800/50">
                           <td className="px-5 py-3 font-mono text-neutral-200">
                             {row.isincod}
+                          </td>
+                          <td className="px-5 py-3 text-neutral-400 font-mono text-xs">
+                            {row.instmnem || "—"}
                           </td>
                           <td className="px-5 py-3 text-neutral-300 truncate max-w-[200px]">
                             {row.dbEntry.name}
@@ -554,7 +610,7 @@ export default function AuswertungPage() {
                           </td>
                         </tr>
                         <tr className="border-b border-neutral-800">
-                          <td colSpan={6} className="px-5 py-4 bg-neutral-900/80">
+                          <td colSpan={7} className="px-5 py-4 bg-neutral-900/80">
                             <div className="text-xs text-neutral-500 mb-3">
                               Aufschlüsselung — {row.betrag.toLocaleString("de-DE", { minimumFractionDigits: 2 })} × Gewicht
                             </div>
