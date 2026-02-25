@@ -14,26 +14,33 @@ interface WeightResult {
   created_at: string;
 }
 
+type TradeSide = "B" | "S";
+
 interface CsvRow {
   isincod: string;
   betrag: number;
+  side: TradeSide;
 }
 
 interface MatchedRow {
   isincod: string;
   betrag: number;
+  side: TradeSide;
   dbEntry: WeightResult;
 }
 
 interface CryptoAllocation {
   name: string;
   totalAmount: number;
+  buyAmount: number;
+  sellAmount: number;
   contributions: {
     isin: string;
     productName: string;
     betrag: number;
     weight: number;
     amount: number;
+    side: TradeSide;
   }[];
 }
 
@@ -95,6 +102,10 @@ function parseCsvFile(file: File): Promise<CsvRow[]> {
           h === "betrag" || h === "amount" || h === "wert" ||
           h === "marktwert" || h === "value"
         );
+        const colSide = headers.findIndex((h) =>
+          h === "ordrbuycod" || h === "ordr_buy_cod" || h === "ordrbuy" ||
+          h === "side" || h === "buy/sell" || h === "buysell"
+        );
 
         if (colIsin < 0) {
           reject(new Error("Keine Spalte 'ISINCOD' gefunden. Bitte prüfe die CSV-Spaltenbezeichnungen."));
@@ -110,11 +121,13 @@ function parseCsvFile(file: File): Promise<CsvRow[]> {
           const cells = splitLine(lines[i]);
           const isinRaw = (cells[colIsin] ?? "").trim().toUpperCase().replace(/\s/g, "");
           const betragRaw = cells[colBetrag] ?? "";
+          const sideRaw = colSide >= 0 ? (cells[colSide] ?? "").trim().toUpperCase() : "B";
           if (!isinRaw) continue;
           if (!ISIN_REGEX.test(isinRaw)) continue;
           const betrag = parseBetrag(betragRaw);
           if (betrag === null || betrag === 0) continue;
-          out.push({ isincod: isinRaw, betrag });
+          const side: TradeSide = sideRaw === "S" ? "S" : "B";
+          out.push({ isincod: isinRaw, betrag, side });
         }
         resolve(out);
       } catch (err) {
@@ -207,21 +220,27 @@ function buildAllocations(matched: MatchedRow[]): CryptoAllocation[] {
       const canonicalName = normalizeCoinName(c.name);
       const amount = (row.betrag * c.weight) / 100;
       if (!map.has(canonicalName)) {
-        map.set(canonicalName, { name: canonicalName, totalAmount: 0, contributions: [] });
+        map.set(canonicalName, { name: canonicalName, totalAmount: 0, buyAmount: 0, sellAmount: 0, contributions: [] });
       }
       const alloc = map.get(canonicalName)!;
-      alloc.totalAmount += amount;
+      if (row.side === "B") {
+        alloc.buyAmount += amount;
+      } else {
+        alloc.sellAmount += amount;
+      }
+      alloc.totalAmount = alloc.buyAmount - alloc.sellAmount;
       alloc.contributions.push({
         isin: row.isincod,
         productName: row.dbEntry.name,
         betrag: row.betrag,
         weight: c.weight,
         amount,
+        side: row.side,
       });
     }
   }
 
-  return Array.from(map.values()).sort((a, b) => b.totalAmount - a.totalAmount);
+  return Array.from(map.values()).sort((a, b) => Math.abs(b.totalAmount) - Math.abs(a.totalAmount));
 }
 
 export default function AuswertungPage() {
@@ -382,10 +401,12 @@ export default function AuswertungPage() {
               </div>
             </div>
             {/* Tabellen-Header */}
-            <div className="grid grid-cols-[auto_1fr_repeat(4,auto)] items-center gap-x-4 px-5 py-2 border-b border-neutral-800 text-xs text-neutral-500">
+            <div className="grid grid-cols-[auto_1fr_repeat(6,auto)] items-center gap-x-4 px-5 py-2 border-b border-neutral-800 text-xs text-neutral-500">
               <span className="w-2.5" />
               <span>Coin</span>
               <span className="text-right w-28">Kurs (USD)</span>
+              <span className="text-right w-28">Buy</span>
+              <span className="text-right w-28">Sell</span>
               <span className="text-right w-32">Gesamt</span>
               <span className="text-right w-28">Anzahl</span>
               <span className="text-right w-14">Anteil</span>
@@ -395,9 +416,9 @@ export default function AuswertungPage() {
                 const pct = totalAllocated > 0 ? (alloc.totalAmount / totalAllocated) * 100 : 0;
                 const colors = ["#f59e0b","#22d3ee","#a78bfa","#34d399","#f472b6","#fb923c","#60a5fa","#4ade80"];
                 const priceUsd = prices[alloc.name.toUpperCase()] ?? null;
-                const coinCount = priceUsd && priceUsd > 0 ? alloc.totalAmount / priceUsd : null;
+                const coinCount = priceUsd && priceUsd > 0 ? Math.abs(alloc.totalAmount) / priceUsd : null;
                 return (
-                  <div key={alloc.name} className="grid grid-cols-[auto_1fr_repeat(4,auto)] items-center gap-x-4 px-5 py-2.5 hover:bg-neutral-800/20">
+                  <div key={alloc.name} className="grid grid-cols-[auto_1fr_repeat(6,auto)] items-center gap-x-4 px-5 py-2.5 hover:bg-neutral-800/20">
                     <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: colors[idx % colors.length] }} />
                     <span className="text-sm text-neutral-200">{alloc.name}</span>
                     <span className="tabular-nums text-sm text-neutral-400 text-right w-28">
@@ -406,6 +427,12 @@ export default function AuswertungPage() {
                             ? priceUsd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
                             : priceUsd.toFixed(4)}`
                         : pricesLoading ? "…" : "—"}
+                    </span>
+                    <span className="tabular-nums text-sm text-emerald-400 text-right w-28">
+                      {alloc.buyAmount > 0 ? formatAmount(alloc.buyAmount) : "—"}
+                    </span>
+                    <span className="tabular-nums text-sm text-red-400 text-right w-28">
+                      {alloc.sellAmount > 0 ? formatAmount(alloc.sellAmount) : "—"}
                     </span>
                     <span className="tabular-nums text-sm text-amber-400 text-right w-32">{formatAmount(alloc.totalAmount)}</span>
                     <span className="tabular-nums text-sm text-emerald-400 text-right w-28">
@@ -439,8 +466,9 @@ export default function AuswertungPage() {
             CSV-Datei hierher ziehen oder per Klick öffnen
           </p>
           <p className="text-neutral-500 text-xs mb-5">
-            Benötigte Spalten: <span className="font-mono text-neutral-400">ISINCOD</span> und{" "}
-            <span className="font-mono text-neutral-400">BETRAG</span>
+            Benötigte Spalten: <span className="font-mono text-neutral-400">ISINCOD</span>,{" "}
+            <span className="font-mono text-neutral-400">BETRAG</span> und{" "}
+            <span className="font-mono text-neutral-400">ORDRBUYCOD</span> (B/S)
           </p>
           <input
             type="file"
@@ -495,6 +523,7 @@ export default function AuswertungPage() {
                     <tr className="text-left text-neutral-500 border-b border-neutral-800 bg-neutral-900">
                       <th className="px-5 py-3 font-normal">ISIN</th>
                       <th className="px-5 py-3 font-normal">Produkt</th>
+                      <th className="px-5 py-3 font-normal text-center w-16">B/S</th>
                       <th className="px-5 py-3 font-normal text-right">Betrag</th>
                       <th className="px-5 py-3 font-normal text-right" colSpan={2}>Konstituenten</th>
                     </tr>
@@ -508,6 +537,15 @@ export default function AuswertungPage() {
                           <td className="px-5 py-3 text-neutral-300 truncate max-w-[200px]">
                             {row.dbEntry.name}
                           </td>
+                          <td className="px-5 py-3 text-center">
+                            <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
+                              row.side === "B"
+                                ? "bg-emerald-500/15 text-emerald-400"
+                                : "bg-red-500/15 text-red-400"
+                            }`}>
+                              {row.side === "B" ? "Buy" : "Sell"}
+                            </span>
+                          </td>
                           <td className="px-5 py-3 text-right tabular-nums text-neutral-200">
                             {formatAmount(row.betrag)}
                           </td>
@@ -516,7 +554,7 @@ export default function AuswertungPage() {
                           </td>
                         </tr>
                         <tr className="border-b border-neutral-800">
-                          <td colSpan={5} className="px-5 py-4 bg-neutral-900/80">
+                          <td colSpan={6} className="px-5 py-4 bg-neutral-900/80">
                             <div className="text-xs text-neutral-500 mb-3">
                               Aufschlüsselung — {row.betrag.toLocaleString("de-DE", { minimumFractionDigits: 2 })} × Gewicht
                             </div>
