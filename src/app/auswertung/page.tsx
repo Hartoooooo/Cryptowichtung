@@ -371,7 +371,7 @@ export default function AuswertungPage() {
   });
 
   const totalBetrag = matched.reduce((s, r) => s + r.betrag, 0);
-  const totalAllocated = allocations.reduce((s, a) => s + a.totalAmount, 0);
+  const totalAllocated = allocations.reduce((s, a) => s + Math.abs(a.totalAmount), 0);
 
   const formatAmount = (n: number) =>
     n.toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -399,18 +399,20 @@ export default function AuswertungPage() {
           <div className="mb-8 rounded-2xl border border-neutral-800 bg-neutral-900/50 overflow-hidden">
             <div className="px-5 py-3 border-b border-neutral-800 flex justify-between items-center">
               <span className="text-sm text-neutral-400">Crypto-Allokation</span>
-              <span className="text-sm text-neutral-500 flex items-center gap-2">
+              <span className="text-sm text-neutral-500 flex items-center gap-4">
                 {pricesLoading && (
                   <span className="text-xs text-neutral-600">Kurse laden…</span>
                 )}
-                Total:{" "}
-                <span className="text-neutral-200 tabular-nums">{formatAmount(totalAllocated)}</span>
+                <span>Buy: <span className="text-emerald-400 tabular-nums">{formatAmount(allocations.reduce((s, a) => s + a.buyAmount, 0))}</span></span>
+                <span>Sell: <span className="text-red-400 tabular-nums">{formatAmount(allocations.reduce((s, a) => s + a.sellAmount, 0))}</span></span>
+                <span>Netto: <span className="text-amber-400 tabular-nums">{formatAmount(allocations.reduce((s, a) => s + a.buyAmount, 0) - allocations.reduce((s, a) => s + a.sellAmount, 0))}</span></span>
+                <span>Total: <span className="text-neutral-200 tabular-nums">{formatAmount(allocations.reduce((s, a) => s + a.buyAmount, 0) + allocations.reduce((s, a) => s + a.sellAmount, 0))}</span></span>
               </span>
             </div>
             <div className="px-5 py-4 border-b border-neutral-800">
               <div className="h-5 rounded-lg overflow-hidden flex">
                 {allocations.map((a, i) => {
-                  const pct = totalAllocated > 0 ? (a.totalAmount / totalAllocated) * 100 : 0;
+                  const pct = totalAllocated > 0 ? (Math.abs(a.totalAmount) / totalAllocated) * 100 : 0;
                   const colors = ["#f59e0b","#22d3ee","#a78bfa","#34d399","#f472b6","#fb923c","#60a5fa","#4ade80"];
                   return (
                     <div
@@ -435,7 +437,7 @@ export default function AuswertungPage() {
             </div>
             <div className="divide-y divide-neutral-800">
               {allocations.map((alloc, idx) => {
-                const pct = totalAllocated > 0 ? (alloc.totalAmount / totalAllocated) * 100 : 0;
+                const pct = totalAllocated > 0 ? (Math.abs(alloc.totalAmount) / totalAllocated) * 100 : 0;
                 const colors = ["#f59e0b","#22d3ee","#a78bfa","#34d399","#f472b6","#fb923c","#60a5fa","#4ade80"];
                 const priceUsd = prices[alloc.name.toUpperCase()] ?? null;
                 const coinCount = priceUsd && priceUsd > 0 ? Math.abs(alloc.totalAmount) / priceUsd : null;
