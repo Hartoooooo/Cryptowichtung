@@ -7,6 +7,7 @@ const NAV_LINKS = [
   { href: "/", label: "Gewichtung" },
   { href: "/datenbank", label: "Datenbank" },
   { href: "/auswertung", label: "Auswertung" },
+  { href: "/verlauf", label: "Verlauf" },
 ];
 
 export default function Header() {

@@ -266,6 +266,8 @@ export default function AuswertungPage() {
   const [pricesLoading, setPricesLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [sideFilter, setSideFilter] = useState<"ALL" | "B" | "S">("ALL");
+  const [saveLoading, setSaveLoading] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<"idle" | "ok" | "error">("idle");
 
   useEffect(() => {
     fetch("/api/weight-results")
@@ -371,6 +373,36 @@ export default function AuswertungPage() {
     return true;
   });
 
+  const handleSaveSnapshot = useCallback(async () => {
+    if (allocations.length === 0) return;
+    setSaveLoading(true);
+    setSaveStatus("idle");
+    const totalAbs = allocations.reduce((s, a) => s + Math.abs(a.totalAmount), 0);
+    const coins = allocations.map((a) => ({
+      name: a.name,
+      buyAmount: a.buyAmount,
+      sellAmount: a.sellAmount,
+      totalAmount: a.totalAmount,
+      pct: totalAbs > 0 ? (Math.abs(a.totalAmount) / totalAbs) * 100 : 0,
+    }));
+    try {
+      const res = await fetch("/api/snapshots", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          snapshot_date: new Date().toISOString().slice(0, 10),
+          coins,
+        }),
+      });
+      setSaveStatus(res.ok ? "ok" : "error");
+    } catch {
+      setSaveStatus("error");
+    } finally {
+      setSaveLoading(false);
+      setTimeout(() => setSaveStatus("idle"), 3000);
+    }
+  }, [allocations]);
+
   const totalBetrag = matched.reduce((s, r) => s + r.betrag, 0);
   const totalAllocated = allocations.reduce((s, a) => s + Math.abs(a.totalAmount), 0);
 
@@ -398,8 +430,19 @@ export default function AuswertungPage() {
         {/* Aggregierte Coin-Übersicht */}
         {allocations.length > 0 && (
           <div className="mb-8 rounded-2xl border border-neutral-800 bg-neutral-900/50 overflow-hidden">
-            <div className="px-5 py-3 border-b border-neutral-800 flex justify-between items-center">
-              <span className="text-sm text-neutral-400">Crypto-Allokation</span>
+            <div className="px-5 py-3 border-b border-neutral-800 flex justify-between items-center flex-wrap gap-2">
+              <div className="flex items-center gap-3">
+                <span className="text-sm text-neutral-400">Crypto-Allokation</span>
+                <button
+                  onClick={handleSaveSnapshot}
+                  disabled={saveLoading}
+                  className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs text-neutral-950 font-medium hover:bg-amber-400 disabled:opacity-50 transition-colors"
+                >
+                  {saveLoading ? "Speichern…" : "Als Verlauf speichern"}
+                </button>
+                {saveStatus === "ok" && <span className="text-xs text-emerald-400">Gespeichert</span>}
+                {saveStatus === "error" && <span className="text-xs text-red-400">Fehler beim Speichern</span>}
+              </div>
               <span className="text-sm text-neutral-500 flex items-center gap-4">
                 {pricesLoading && (
                   <span className="text-xs text-neutral-600">Kurse laden…</span>
@@ -410,6 +453,7 @@ export default function AuswertungPage() {
                 <span>Total: <span className="text-neutral-200 tabular-nums">{formatAmount(allocations.reduce((s, a) => s + a.buyAmount, 0) + allocations.reduce((s, a) => s + a.sellAmount, 0))}</span></span>
               </span>
             </div>
+
             <div className="px-5 py-4 border-b border-neutral-800">
               <div className="h-5 rounded-lg overflow-hidden flex">
                 {allocations.map((a, i) => {
