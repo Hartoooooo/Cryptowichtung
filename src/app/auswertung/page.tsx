@@ -407,7 +407,7 @@ export default function AuswertungPage() {
   const totalAllocated = allocations.reduce((s, a) => s + Math.abs(a.totalAmount), 0);
 
   const formatAmount = (n: number) =>
-    n.toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    n.toLocaleString("de-DE", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 font-sans antialiased">
@@ -504,11 +504,9 @@ export default function AuswertungPage() {
                       {alloc.sellAmount > 0 ? formatAmount(alloc.sellAmount) : "—"}
                     </span>
                     <span className="tabular-nums text-sm text-amber-400 text-right w-32">{formatAmount(alloc.totalAmount)}</span>
-                    <span className="tabular-nums text-sm text-emerald-400 text-right w-28">
+                    <span className={`tabular-nums text-sm text-right w-28 ${alloc.totalAmount < 0 ? "text-red-400" : "text-emerald-400"}`}>
                       {coinCount != null
-                        ? coinCount >= 0.01
-                          ? coinCount.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 })
-                          : coinCount.toFixed(8)
+                        ? (Math.ceil(coinCount * 100) / 100).toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
                         : pricesLoading ? "…" : "—"}
                     </span>
                     <span className="tabular-nums text-sm text-neutral-500 text-right w-14">{pct.toFixed(2)}%</span>
@@ -659,7 +657,7 @@ export default function AuswertungPage() {
                         <tr className="border-b border-neutral-800">
                           <td colSpan={7} className="px-5 py-4 bg-neutral-900/80">
                             <div className="text-xs text-neutral-500 mb-3">
-                              Aufschlüsselung — {row.betrag.toLocaleString("de-DE", { minimumFractionDigits: 2 })} × Gewicht
+                              Aufschlüsselung — {formatAmount(row.betrag)} × Gewicht
                             </div>
                             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
                               {[...row.dbEntry.constituents]
