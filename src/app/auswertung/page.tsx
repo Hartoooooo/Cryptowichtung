@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo, Fragment } from "react";
+import MusteranalyseSection from "@/components/musteranalyse/MusteranalyseSection";
 interface Constituent {
   name: string;
   weight: number;
@@ -21,6 +22,9 @@ interface CsvRow {
   betrag: number;
   side: TradeSide;
   instmnem: string;
+  instshtnam: string;
+  iban: string;
+  trandattim?: string;
 }
 
 interface MatchedRow {
@@ -28,6 +32,8 @@ interface MatchedRow {
   betrag: number;
   side: TradeSide;
   instmnem: string;
+  instshtnam: string;
+  iban: string;
   dbEntry: WeightResult;
 }
 
@@ -52,6 +58,22 @@ function detectDelimiter(firstLine: string): string {
   const semicolons = (firstLine.match(/;/g) || []).length;
   const commas = (firstLine.match(/,/g) || []).length;
   return semicolons >= commas ? ";" : ",";
+}
+
+/** Extrahiert nur die Uhrzeit aus TRANDATTIM (z.B. "14:30" oder "14:30:00"). */
+function extractTimeFromTrandattim(raw: string | undefined): string {
+  if (!raw || !raw.trim()) return "—";
+  const s = raw.trim();
+  // Bereits Zeitformat HH:mm oder HH:mm:ss
+  const timeOnly = s.match(/^\d{1,2}:\d{2}(:\d{2})?/);
+  if (timeOnly) return timeOnly[0];
+  // Zeit irgendwo im String (z.B. "2024-01-15 14:30:00" oder "15.01.2024 14:30")
+  const inStr = s.match(/\d{1,2}:\d{2}(:\d{2})?/);
+  if (inStr) return inStr[0];
+  // Kompakte Form ohne Trennzeichen: 143000 oder 1430
+  const compact = s.match(/(\d{2})(\d{2})(\d{2})?$/);
+  if (compact) return compact[3] ? `${compact[1]}:${compact[2]}:${compact[3]}` : `${compact[1]}:${compact[2]}`;
+  return "—";
 }
 
 function parseBetrag(raw: string): number | null {
@@ -112,6 +134,19 @@ function parseCsvFile(file: File): Promise<CsvRow[]> {
           h === "instmnem" || h === "inst_mnem" || h === "instrument" ||
           h === "ticker" || h === "symbol"
         );
+        const colInstshtnam = headers.findIndex((h) =>
+          h === "instshtnam" || h === "inst_sht_nam" || h === "instrumentshortname" ||
+          h === "instrument short name" || h === "shortname" || h === "short name"
+        );
+        const colIban = headers.findIndex((h) => {
+          const x = h.replace(/[^a-z0-9]/g, "");
+          return ["iban", "ordraccount", "orderaccount", "ordraccnum", "order_account",
+            "konto", "account", "kontonummer", "depot", "accnum", "acct"].includes(x);
+        });
+        const colTrandattim = headers.findIndex((h) => {
+          const x = h.toLowerCase().replace(/[^a-z0-9]/g, "");
+          return x === "trandattim" || h.toLowerCase().includes("trandattim");
+        });
 
         if (colIsin < 0) {
           reject(new Error("Keine Spalte 'ISINCOD' gefunden. Bitte prüfe die CSV-Spaltenbezeichnungen."));
@@ -129,12 +164,15 @@ function parseCsvFile(file: File): Promise<CsvRow[]> {
           const betragRaw = cells[colBetrag] ?? "";
           const sideRaw = colSide >= 0 ? (cells[colSide] ?? "").trim().toUpperCase() : "B";
           const instmnem = colInstmnem >= 0 ? (cells[colInstmnem] ?? "").trim() : "";
+          const instshtnam = colInstshtnam >= 0 ? (cells[colInstshtnam] ?? "").trim() : "";
+          const iban = colIban >= 0 ? (cells[colIban] ?? "").trim() : "";
           if (!isinRaw) continue;
           if (!ISIN_REGEX.test(isinRaw)) continue;
           const betrag = parseBetrag(betragRaw);
           if (betrag === null || betrag === 0) continue;
           const side: TradeSide = sideRaw === "S" ? "S" : "B";
-          out.push({ isincod: isinRaw, betrag, side, instmnem });
+          const trandattim = colTrandattim >= 0 ? (cells[colTrandattim] ?? "").trim() : undefined;
+          out.push({ isincod: isinRaw, betrag, side, instmnem, instshtnam, iban, trandattim: trandattim || undefined });
         }
         resolve(out);
       } catch (err) {
@@ -264,10 +302,13 @@ export default function AuswertungPage() {
   const [allocations, setAllocations] = useState<CryptoAllocation[]>([]);
   const [prices, setPrices] = useState<Record<string, number>>({});
   const [pricesLoading, setPricesLoading] = useState(false);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [sideFilter, setSideFilter] = useState<"ALL" | "B" | "S">("ALL");
+  const [ibanFilter, setIbanFilter] = useState("");
   const [saveLoading, setSaveLoading] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "ok" | "error">("idle");
+  const [coinsExpanded, setCoinsExpanded] = useState(false);
+  const [selectedPosition, setSelectedPosition] = useState<string | null>(null);
+  const [positionSortBy, setPositionSortBy] = useState<"betrag" | "side" | "kürzel" | "uhrzeit">("betrag");
+  const [positionSortDir, setPositionSortDir] = useState<"asc" | "desc">("desc");
 
   useEffect(() => {
     fetch("/api/weight-results")
@@ -360,18 +401,69 @@ export default function AuswertungPage() {
     [handleFile]
   );
 
-  const filteredMatched = matched.filter((row) => {
-    if (sideFilter !== "ALL" && row.side !== sideFilter) return false;
-    if (searchTerm) {
-      const q = searchTerm.toLowerCase();
-      if (
-        !row.isincod.toLowerCase().includes(q) &&
-        !row.instmnem.toLowerCase().includes(q) &&
-        !row.dbEntry.name.toLowerCase().includes(q)
-      ) return false;
+  const aggregatedByIban = useMemo(() => {
+    const rows = csvRows.filter((row) => {
+      if (ibanFilter.trim()) {
+        const q = ibanFilter.toLowerCase();
+        const groupKey = row.iban || row.isincod;
+        const matchIbanOrIsin = groupKey.toLowerCase().includes(q);
+        const matchTicker = (row.instmnem ?? "").toLowerCase().includes(q);
+        if (!matchIbanOrIsin && !matchTicker) return false;
+      }
+      return true;
+    });
+    const map = new Map<string, { iban: string; tickers: Set<string>; names: Set<string>; buyAmount: number; sellAmount: number; etpLabels: Set<string>; count: number }>();
+    for (const row of rows) {
+      const key = (row.iban ?? "").trim() || row.isincod;
+      if (!map.has(key)) {
+        map.set(key, { iban: key, tickers: new Set(), names: new Set(), buyAmount: 0, sellAmount: 0, etpLabels: new Set(), count: 0 });
+      }
+      const agg = map.get(key)!;
+      agg.count += 1;
+      if (row.instmnem) agg.tickers.add(row.instmnem);
+      const dbEntry = dbEntries.find((d) => d.isin.toUpperCase() === row.isincod);
+      const nameVal = (row.instshtnam ?? "").trim() || dbEntry?.name;
+      if (nameVal) agg.names.add(nameVal);
+      if (row.side === "B") agg.buyAmount += row.betrag;
+      else agg.sellAmount += row.betrag;
+      if (dbEntry) {
+        const label = dbEntry.constituents.length === 1
+          ? normalizeCoinName(dbEntry.constituents[0].name)
+          : "Basket";
+        agg.etpLabels.add(label);
+      }
     }
-    return true;
-  });
+    return Array.from(map.values())
+      .map((a) => {
+        const labels = Array.from(a.etpLabels);
+        const etpLabel = labels.length === 0 ? "" : labels.length === 1 ? labels[0] : "Basket";
+        const tickerDisplay = Array.from(a.tickers).filter(Boolean).join(", ") || "—";
+        const nameDisplay = Array.from(a.names).filter(Boolean).join(", ") || "—";
+        return { ...a, gesamt: a.buyAmount - a.sellAmount, etpLabel, tickerDisplay, nameDisplay };
+      })
+      .sort((a, b) => Math.abs(b.gesamt) - Math.abs(a.gesamt));
+  }, [csvRows, ibanFilter, dbEntries]);
+
+  const selectedPositionTrades = useMemo(() => {
+    if (!selectedPosition) return [];
+    return csvRows
+      .filter((row) => ((row.iban ?? "").trim() || row.isincod) === selectedPosition)
+      .sort((a, b) => {
+        const mul = positionSortDir === "asc" ? 1 : -1;
+        if (positionSortBy === "betrag") return mul * (Math.abs(b.betrag) - Math.abs(a.betrag));
+        if (positionSortBy === "side") return mul * (a.side.localeCompare(b.side));
+        if (positionSortBy === "uhrzeit") {
+          const toSec = (raw: string | undefined) => {
+            const t = extractTimeFromTrandattim(raw);
+            if (t === "—") return 999999;
+            const [h, m, s] = t.split(":").map(Number);
+            return (h ?? 0) * 3600 + (m ?? 0) * 60 + (s ?? 0);
+          };
+          return mul * (toSec(a.trandattim) - toSec(b.trandattim));
+        }
+        return mul * ((a.instmnem ?? "").localeCompare(b.instmnem ?? ""));
+      });
+  }, [selectedPosition, csvRows, positionSortBy, positionSortDir]);
 
   const handleSaveSnapshot = useCallback(async () => {
     if (allocations.length === 0) return;
@@ -403,7 +495,6 @@ export default function AuswertungPage() {
     }
   }, [allocations]);
 
-  const totalBetrag = matched.reduce((s, r) => s + r.betrag, 0);
   const totalAllocated = allocations.reduce((s, a) => s + Math.abs(a.totalAmount), 0);
 
   const formatAmount = (n: number) =>
@@ -426,6 +517,52 @@ export default function AuswertungPage() {
             {dbError}
           </div>
         )}
+
+        {/* Drag & Drop Zone */}
+        <div
+          onDrop={handleDrop}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={(e) => { e.preventDefault(); setDragOver(false); }}
+          className={`mb-8 rounded-2xl border-2 border-dashed p-10 text-center transition-colors ${
+            dragOver
+              ? "border-amber-500 bg-amber-500/5"
+              : "border-neutral-700 hover:border-neutral-600"
+          }`}
+        >
+          <div className="mb-3 text-3xl text-neutral-600">↓</div>
+          <p className="text-neutral-300 text-sm mb-1">
+            CSV-Datei hierher ziehen oder per Klick öffnen
+          </p>
+          <p className="text-neutral-500 text-xs mb-5">
+            Benötigte Spalten: <span className="font-mono text-neutral-400">ISINCOD</span>,{" "}
+            <span className="font-mono text-neutral-400">BETRAG</span>,{" "}
+            <span className="font-mono text-neutral-400">ORDRBUYCOD</span> (B/S).
+            Optional: <span className="font-mono text-neutral-400">INSTSHTNAM</span>,{" "}
+            <span className="font-mono text-neutral-400">IBAN</span>
+          </p>
+          <input
+            type="file"
+            accept=".csv,text/csv,text/plain"
+            className="hidden"
+            id="csv-input"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleFile(f);
+              e.target.value = "";
+            }}
+          />
+          <label
+            htmlFor="csv-input"
+            className="inline-block rounded-xl bg-neutral-800 px-5 py-2.5 text-sm text-neutral-200 cursor-pointer hover:bg-neutral-700 transition-colors"
+          >
+            Datei auswählen
+          </label>
+          {csvRows.length > 0 && (
+            <p className="mt-4 text-amber-400 text-sm">
+              {csvRows.length} gültige Zeile(n) geladen · {matched.length} in Datenbank gefunden
+            </p>
+          )}
+        </div>
 
         {/* Aggregierte Coin-Übersicht */}
         {allocations.length > 0 && (
@@ -481,7 +618,7 @@ export default function AuswertungPage() {
               <span className="text-right w-14">Anteil</span>
             </div>
             <div className="divide-y divide-neutral-800">
-              {allocations.map((alloc, idx) => {
+              {allocations.slice(0, 10).map((alloc, idx) => {
                 const pct = totalAllocated > 0 ? (Math.abs(alloc.totalAmount) / totalAllocated) * 100 : 0;
                 const colors = ["#f59e0b","#22d3ee","#a78bfa","#34d399","#f472b6","#fb923c","#60a5fa","#4ade80"];
                 const priceUsd = prices[alloc.name.toUpperCase()] ?? null;
@@ -513,53 +650,51 @@ export default function AuswertungPage() {
                   </div>
                 );
               })}
+              {allocations.length > 10 && (
+                <>
+                  <button
+                    onClick={() => setCoinsExpanded(!coinsExpanded)}
+                    className="w-full flex justify-end px-5 py-2 text-sm text-amber-400 hover:text-amber-300 transition-colors"
+                  >
+                    {coinsExpanded ? "Weniger ▲" : `+${allocations.length - 10} weitere ▼`}
+                  </button>
+                  {coinsExpanded && allocations.slice(10).map((alloc, idx) => {
+                    const pct = totalAllocated > 0 ? (Math.abs(alloc.totalAmount) / totalAllocated) * 100 : 0;
+                    const colors = ["#f59e0b","#22d3ee","#a78bfa","#34d399","#f472b6","#fb923c","#60a5fa","#4ade80"];
+                    const priceUsd = prices[alloc.name.toUpperCase()] ?? null;
+                    const coinCount = priceUsd && priceUsd > 0 ? Math.abs(alloc.totalAmount) / priceUsd : null;
+                    return (
+                      <div key={alloc.name} className="grid grid-cols-[auto_1fr_repeat(6,auto)] items-center gap-x-4 px-5 py-2.5 hover:bg-neutral-800/20">
+                        <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: colors[(idx + 10) % colors.length] }} />
+                        <span className="text-sm text-neutral-200">{alloc.name}</span>
+                        <span className="tabular-nums text-sm text-neutral-400 text-right w-28">
+                          {priceUsd != null
+                            ? `$${priceUsd >= 1
+                                ? priceUsd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                                : priceUsd.toFixed(4)}`
+                            : pricesLoading ? "…" : "—"}
+                        </span>
+                        <span className="tabular-nums text-sm text-emerald-400 text-right w-28">
+                          {alloc.buyAmount > 0 ? formatAmount(alloc.buyAmount) : "—"}
+                        </span>
+                        <span className="tabular-nums text-sm text-red-400 text-right w-28">
+                          {alloc.sellAmount > 0 ? formatAmount(alloc.sellAmount) : "—"}
+                        </span>
+                        <span className="tabular-nums text-sm text-amber-400 text-right w-32">{formatAmount(alloc.totalAmount)}</span>
+                        <span className={`tabular-nums text-sm text-right w-28 ${alloc.totalAmount < 0 ? "text-red-400" : "text-emerald-400"}`}>
+                          {coinCount != null
+                            ? (Math.ceil(coinCount * 100) / 100).toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                            : pricesLoading ? "…" : "—"}
+                        </span>
+                        <span className="tabular-nums text-sm text-neutral-500 text-right w-14">{pct.toFixed(2)}%</span>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
             </div>
           </div>
         )}
-
-        {/* Drag & Drop Zone */}
-        <div
-          onDrop={handleDrop}
-          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={(e) => { e.preventDefault(); setDragOver(false); }}
-          className={`mb-8 rounded-2xl border-2 border-dashed p-10 text-center transition-colors ${
-            dragOver
-              ? "border-amber-500 bg-amber-500/5"
-              : "border-neutral-700 hover:border-neutral-600"
-          }`}
-        >
-          <div className="mb-3 text-3xl text-neutral-600">↓</div>
-          <p className="text-neutral-300 text-sm mb-1">
-            CSV-Datei hierher ziehen oder per Klick öffnen
-          </p>
-          <p className="text-neutral-500 text-xs mb-5">
-            Benötigte Spalten: <span className="font-mono text-neutral-400">ISINCOD</span>,{" "}
-            <span className="font-mono text-neutral-400">BETRAG</span> und{" "}
-            <span className="font-mono text-neutral-400">ORDRBUYCOD</span> (B/S)
-          </p>
-          <input
-            type="file"
-            accept=".csv,text/csv,text/plain"
-            className="hidden"
-            id="csv-input"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) handleFile(f);
-              e.target.value = "";
-            }}
-          />
-          <label
-            htmlFor="csv-input"
-            className="inline-block rounded-xl bg-neutral-800 px-5 py-2.5 text-sm text-neutral-200 cursor-pointer hover:bg-neutral-700 transition-colors"
-          >
-            Datei auswählen
-          </label>
-          {csvRows.length > 0 && (
-            <p className="mt-4 text-amber-400 text-sm">
-              {csvRows.length} gültige Zeile(n) geladen · {matched.length} in Datenbank gefunden
-            </p>
-          )}
-        </div>
 
         {parseError && (
           <div className="mb-6 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-red-300 text-sm">
@@ -571,124 +706,144 @@ export default function AuswertungPage() {
           <p className="text-neutral-500 text-sm text-center">Lade Datenbank…</p>
         )}
 
-
-        {matched.length > 0 && (
-          <>
-            {/* Such- und Filterleiste */}
-            <div className="mb-4 flex flex-wrap items-center gap-3">
+        {/* Größte Positionen (alle CSV-Zeilen, sortiert nach Betrag, Buy/Sell, IBAN-Filter) */}
+        {csvRows.length > 0 && (
+          <div className="mb-8 rounded-2xl border border-neutral-800 bg-neutral-900/50 overflow-hidden">
+            <div className="px-5 py-3 border-b border-neutral-800 flex flex-wrap items-center justify-between gap-3">
+              <span className="text-sm text-neutral-400">Größte Positionen ({aggregatedByIban.length})</span>
               <input
                 type="text"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Ticker, ISIN oder Produkt suchen…"
-                className="flex-1 min-w-[200px] rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-2.5 text-sm text-neutral-100 placeholder-neutral-500 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 transition-colors"
+                value={ibanFilter}
+                onChange={(e) => setIbanFilter(e.target.value)}
+                placeholder="Suche"
+                className="rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-200 placeholder-neutral-500 focus:border-amber-500 focus:outline-none w-40"
               />
-              <div className="flex rounded-xl border border-neutral-700 overflow-hidden text-sm">
-                {(["ALL", "B", "S"] as const).map((val) => (
-                  <button
-                    key={val}
-                    onClick={() => setSideFilter(val)}
-                    className={`px-4 py-2.5 transition-colors ${
-                      sideFilter === val
-                        ? val === "B"
-                          ? "bg-emerald-500/20 text-emerald-400"
-                          : val === "S"
-                          ? "bg-red-500/20 text-red-400"
-                          : "bg-amber-500/20 text-amber-400"
-                        : "text-neutral-400 hover:bg-neutral-800"
-                    }`}
-                  >
-                    {val === "ALL" ? "Alle" : val === "B" ? "Buy" : "Sell"}
-                  </button>
-                ))}
-              </div>
             </div>
-
-            {/* Matched ISINs Tabelle */}
-            <div className="mb-8 rounded-2xl border border-neutral-800 bg-neutral-900/50 overflow-hidden">
-              <div className="px-5 py-3 border-b border-neutral-800 flex justify-between items-center">
-                <span className="text-sm text-neutral-400">
-                  Gefundene Trades ({filteredMatched.length}{filteredMatched.length !== matched.length ? ` / ${matched.length}` : ""})
-                </span>
-                <span className="text-sm text-neutral-500">
-                  Gesamt: <span className="text-neutral-200 tabular-nums">{formatAmount(totalBetrag)}</span>
-                </span>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-left text-neutral-500 border-b border-neutral-800 bg-neutral-900">
-                      <th className="px-5 py-3 font-normal">ISIN</th>
-                      <th className="px-5 py-3 font-normal">Ticker</th>
-                      <th className="px-5 py-3 font-normal">Produkt</th>
-                      <th className="px-5 py-3 font-normal text-center w-16">B/S</th>
-                      <th className="px-5 py-3 font-normal text-right">Betrag</th>
-                      <th className="px-5 py-3 font-normal text-right" colSpan={2}>Konstituenten</th>
-                    </tr>
-                  </thead>
-                  {filteredMatched.map((row, idx) => (
-                      <tbody key={`${row.isincod}-${idx}`}>
-                        <tr className="border-b border-neutral-800/50">
-                          <td className="px-5 py-3 font-mono text-neutral-200">
-                            {row.isincod}
-                          </td>
-                          <td className="px-5 py-3 font-mono text-neutral-200">
-                            {row.instmnem || "—"}
-                          </td>
-                          <td className="px-5 py-3 text-neutral-300 truncate max-w-[200px]">
-                            {row.dbEntry.name}
-                          </td>
-                          <td className="px-5 py-3 text-center">
-                            <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
-                              row.side === "B"
-                                ? "bg-emerald-500/15 text-emerald-400"
-                                : "bg-red-500/15 text-red-400"
-                            }`}>
-                              {row.side === "B" ? "Buy" : "Sell"}
+            <div className="overflow-x-auto max-h-[42rem] overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-neutral-900 z-10">
+                  <tr className="text-left text-neutral-500 border-b border-neutral-800">
+                    <th className="px-5 py-3 font-normal">ISIN</th>
+                    <th className="px-5 py-3 font-normal">Kürzel</th>
+                    <th className="px-5 py-3 font-normal">Name</th>
+                    <th className="px-5 py-3 font-normal text-right w-16">Trades</th>
+                    <th className="px-5 py-3 font-normal text-right">Buy</th>
+                    <th className="px-5 py-3 font-normal text-right">Sell</th>
+                    <th className="px-5 py-3 font-normal text-right">Gesamt</th>
+                    <th className="px-5 py-3 font-normal text-center w-24">Crypto</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {aggregatedByIban.map((agg) => (
+                    <Fragment key={agg.iban}>
+                      <tr
+                        onClick={() => setSelectedPosition(selectedPosition === agg.iban ? null : agg.iban)}
+                        className={`border-b border-neutral-800/50 hover:bg-neutral-800/20 cursor-pointer transition-colors ${selectedPosition === agg.iban ? "bg-amber-500/10" : ""}`}
+                      >
+                        <td className="px-5 py-2 font-mono text-neutral-200 truncate max-w-[200px]">{agg.iban}</td>
+                        <td className="px-5 py-2 font-mono text-neutral-400 text-sm">{agg.tickerDisplay}</td>
+                        <td className="px-5 py-2 text-neutral-300 truncate max-w-[180px]" title={agg.nameDisplay}>{agg.nameDisplay}</td>
+                        <td className="px-5 py-2 text-right tabular-nums text-neutral-400">{agg.count}</td>
+                        <td className="px-5 py-2 text-right tabular-nums text-emerald-400">{agg.buyAmount !== 0 ? formatAmount(agg.buyAmount) : "—"}</td>
+                        <td className="px-5 py-2 text-right tabular-nums text-red-400">{agg.sellAmount !== 0 ? formatAmount(agg.sellAmount) : "—"}</td>
+                        <td className="px-5 py-2 text-right tabular-nums text-amber-400">{formatAmount(agg.gesamt)}</td>
+                        <td className="px-5 py-2 text-center">
+                          {agg.etpLabel ? (
+                            <span className="inline-block px-2 py-0.5 rounded text-xs bg-amber-500/15 text-amber-400 font-medium">
+                              {agg.etpLabel}
                             </span>
-                          </td>
-                          <td className="px-5 py-3 text-right tabular-nums text-neutral-200">
-                            {formatAmount(row.betrag)}
-                          </td>
-                          <td className="px-5 py-3 text-right text-neutral-500" colSpan={2}>
-                            {row.dbEntry.constituents.length} Konst.
+                          ) : (
+                            <span className="text-neutral-600">—</span>
+                          )}
+                        </td>
+                      </tr>
+                      {/* Einzelansicht: Trades direkt unter der angeklickten Zeile */}
+                      {selectedPosition === agg.iban && selectedPositionTrades.length > 0 && (
+                        <tr>
+                          <td colSpan={8} className="p-0 align-top bg-neutral-900/80 border-b border-neutral-800/50">
+                            <div className="px-5 py-3 flex justify-between items-center flex-wrap gap-2 border-b border-neutral-800/50">
+                              <span className="text-sm text-neutral-400">
+                                {selectedPositionTrades.length} Trades für {agg.iban}
+                              </span>
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setSelectedPosition(null); }}
+                                className="text-xs text-neutral-500 hover:text-neutral-300"
+                              >
+                                Schließen
+                              </button>
+                            </div>
+                            <div className="overflow-x-auto max-h-64 overflow-y-auto">
+                              <table className="w-full text-sm">
+                                <thead className="sticky top-0 bg-neutral-900 z-10">
+                                  <tr className="text-left text-neutral-500 border-b border-neutral-800">
+                                    <th
+                                      onClick={(e) => { e.stopPropagation(); setPositionSortBy("side"); setPositionSortDir((d) => (positionSortBy === "side" ? (d === "asc" ? "desc" : "asc") : "asc")); }}
+                                      className="px-5 py-2 font-normal cursor-pointer hover:text-neutral-400"
+                                    >
+                                      B/S {positionSortBy === "side" && (positionSortDir === "asc" ? "↑" : "↓")}
+                                    </th>
+                                    <th
+                                      onClick={(e) => { e.stopPropagation(); setPositionSortBy("uhrzeit"); setPositionSortDir((d) => (positionSortBy === "uhrzeit" ? (d === "asc" ? "desc" : "asc") : "asc")); }}
+                                      className="px-5 py-2 font-normal cursor-pointer hover:text-neutral-400 w-20"
+                                    >
+                                      Uhrzeit {positionSortBy === "uhrzeit" && (positionSortDir === "asc" ? "↑" : "↓")}
+                                    </th>
+                                    <th
+                                      onClick={(e) => { e.stopPropagation(); setPositionSortBy("kürzel"); setPositionSortDir((d) => (positionSortBy === "kürzel" ? (d === "asc" ? "desc" : "asc") : "asc")); }}
+                                      className="px-5 py-2 font-normal cursor-pointer hover:text-neutral-400"
+                                    >
+                                      Kürzel {positionSortBy === "kürzel" && (positionSortDir === "asc" ? "↑" : "↓")}
+                                    </th>
+                                    <th className="px-5 py-2 font-normal">Name</th>
+                                    <th
+                                      onClick={(e) => { e.stopPropagation(); setPositionSortBy("betrag"); setPositionSortDir((d) => (positionSortBy === "betrag" ? (d === "asc" ? "desc" : "asc") : "desc")); }}
+                                      className="px-5 py-2 font-normal text-right cursor-pointer hover:text-neutral-400"
+                                    >
+                                      Betrag {positionSortBy === "betrag" && (positionSortDir === "asc" ? "↑" : "↓")}
+                                    </th>
+                                    <th className="px-5 py-2 font-normal text-center w-20">Crypto</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {selectedPositionTrades.map((row, idx) => {
+                                    const dbEntry = dbEntries.find((d) => d.isin.toUpperCase() === row.isincod);
+                                    const etpLabel = dbEntry
+                                      ? dbEntry.constituents.length === 1
+                                        ? normalizeCoinName(dbEntry.constituents[0].name)
+                                        : "Basket"
+                                      : null;
+                                    return (
+                                      <tr key={idx} className="border-b border-neutral-800/50 hover:bg-neutral-800/20">
+                                        <td className="px-5 py-2">
+                                          <span className={`inline-block px-2 py-0.5 rounded text-xs ${row.side === "B" ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"}`}>
+                                            {row.side === "B" ? "Buy" : "Sell"}
+                                          </span>
+                                        </td>
+                                        <td className="px-5 py-2 font-mono text-neutral-400 tabular-nums">{extractTimeFromTrandattim(row.trandattim)}</td>
+                                        <td className="px-5 py-2 font-mono text-neutral-400">{row.instmnem || "—"}</td>
+                                        <td className="px-5 py-2 text-neutral-300 truncate max-w-[160px]" title={row.instshtnam || dbEntry?.name}>{row.instshtnam || dbEntry?.name || "—"}</td>
+                                        <td className="px-5 py-2 text-right tabular-nums text-neutral-200">{formatAmount(row.betrag)}</td>
+                                        <td className="px-5 py-2 text-center">
+                                          {etpLabel ? <span className="text-xs text-amber-400">{etpLabel}</span> : "—"}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
                           </td>
                         </tr>
-                        <tr className="border-b border-neutral-800">
-                          <td colSpan={7} className="px-5 py-4 bg-neutral-900/80">
-                            <div className="text-xs text-neutral-500 mb-3">
-                              Aufschlüsselung — {formatAmount(row.betrag)} × Gewicht
-                            </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-                              {[...row.dbEntry.constituents]
-                                .sort((a, b) => b.weight - a.weight)
-                                .map((c, i) => (
-                                  <div
-                                    key={i}
-                                    className="flex justify-between items-center rounded-lg bg-neutral-800/60 px-3 py-2"
-                                  >
-                                    <span className="text-neutral-300 text-xs">{c.name}</span>
-                                    <div className="text-right">
-                                      <div className="text-xs text-amber-400 tabular-nums">
-                                        {formatAmount((row.betrag * c.weight) / 100)}
-                                      </div>
-                                      <div className="text-xs text-neutral-500 tabular-nums">
-                                        {c.weight.toFixed(2)}%
-                                      </div>
-                                    </div>
-                                  </div>
-                                ))}
-                            </div>
-                          </td>
-                        </tr>
-                      </tbody>
-                    ))}
+                      )}
+                    </Fragment>
+                  ))}
+                </tbody>
               </table>
-              </div>
             </div>
-
-          </>
+          </div>
         )}
+
+        <MusteranalyseSection csvRows={csvRows} />
 
         {!csvRows.length && !parseError && !dbLoading && (
           <p className="text-neutral-500 text-sm text-center mt-4">
