@@ -251,11 +251,36 @@ const COIN_ALIASES: Record<string, string> = {
   // TON
   ton: "TON",
   toncoin: "TON",
+  // Rohstoffe/Edelmetalle
+  gold: "XAU",
+  xau: "XAU",
+  silver: "XAG",
+  xag: "XAG",
 };
 
 function normalizeCoinName(name: string): string {
   const lower = name.toLowerCase().trim();
   return COIN_ALIASES[lower] ?? name;
+}
+
+/** Rohstoffe (Edelmetalle) – eigene Sektion */
+const ROHSTOFF_SYMBOLS = new Set(["XAU", "XAG", "GOLD", "SILVER"]);
+
+function isRohstoff(name: string): boolean {
+  return ROHSTOFF_SYMBOLS.has(name.toUpperCase().trim());
+}
+
+/** Anzeigename für Rohstoffe */
+const ROHSTOFF_DISPLAY: Record<string, string> = {
+  XAU: "Gold",
+  XAG: "Silber",
+  GOLD: "Gold",
+  SILVER: "Silber",
+};
+
+function getRohstoffDisplayName(name: string): string {
+  const upper = name.toUpperCase().trim();
+  return ROHSTOFF_DISPLAY[upper] ?? name;
 }
 
 function buildAllocations(matched: MatchedRow[]): CryptoAllocation[] {
@@ -427,9 +452,10 @@ export default function AuswertungPage() {
       if (row.side === "B") agg.buyAmount += row.betrag;
       else agg.sellAmount += row.betrag;
       if (dbEntry) {
-        const label = dbEntry.constituents.length === 1
+        const canonical = dbEntry.constituents.length === 1
           ? normalizeCoinName(dbEntry.constituents[0].name)
           : "Basket";
+        const label = canonical === "Basket" ? "Basket" : (isRohstoff(canonical) ? getRohstoffDisplayName(canonical) : canonical);
         agg.etpLabels.add(label);
       }
     }
@@ -496,6 +522,17 @@ export default function AuswertungPage() {
   }, [allocations]);
 
   const totalAllocated = allocations.reduce((s, a) => s + Math.abs(a.totalAmount), 0);
+
+  const cryptoAllocations = useMemo(
+    () => allocations.filter((a) => !isRohstoff(a.name)),
+    [allocations]
+  );
+  const rohstoffAllocations = useMemo(
+    () => allocations.filter((a) => isRohstoff(a.name)),
+    [allocations]
+  );
+  const totalCryptoAllocated = cryptoAllocations.reduce((s, a) => s + Math.abs(a.totalAmount), 0);
+  const totalRohstoffAllocated = rohstoffAllocations.reduce((s, a) => s + Math.abs(a.totalAmount), 0);
 
   const formatAmount = (n: number) =>
     n.toLocaleString("de-DE", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -564,8 +601,8 @@ export default function AuswertungPage() {
           )}
         </div>
 
-        {/* Aggregierte Coin-Übersicht */}
-        {allocations.length > 0 && (
+        {/* Crypto-Allokation */}
+        {cryptoAllocations.length > 0 && (
           <div className="mb-8 rounded-2xl border border-neutral-800 bg-neutral-900/50 overflow-hidden">
             <div className="px-5 py-3 border-b border-neutral-800 flex justify-between items-center flex-wrap gap-2">
               <div className="flex items-center gap-3">
@@ -584,17 +621,17 @@ export default function AuswertungPage() {
                 {pricesLoading && (
                   <span className="text-xs text-neutral-600">Kurse laden…</span>
                 )}
-                <span>Buy: <span className="text-emerald-400 tabular-nums">{formatAmount(allocations.reduce((s, a) => s + a.buyAmount, 0))}</span></span>
-                <span>Sell: <span className="text-red-400 tabular-nums">{formatAmount(allocations.reduce((s, a) => s + a.sellAmount, 0))}</span></span>
-                <span>Netto: <span className="text-amber-400 tabular-nums">{formatAmount(allocations.reduce((s, a) => s + a.buyAmount, 0) - allocations.reduce((s, a) => s + a.sellAmount, 0))}</span></span>
-                <span>Total: <span className="text-neutral-200 tabular-nums">{formatAmount(allocations.reduce((s, a) => s + a.buyAmount, 0) + allocations.reduce((s, a) => s + a.sellAmount, 0))}</span></span>
+                <span>Buy: <span className="text-emerald-400 tabular-nums">{formatAmount(cryptoAllocations.reduce((s, a) => s + a.buyAmount, 0))}</span></span>
+                <span>Sell: <span className="text-red-400 tabular-nums">{formatAmount(cryptoAllocations.reduce((s, a) => s + a.sellAmount, 0))}</span></span>
+                <span>Netto: <span className="text-amber-400 tabular-nums">{formatAmount(cryptoAllocations.reduce((s, a) => s + a.buyAmount, 0) - cryptoAllocations.reduce((s, a) => s + a.sellAmount, 0))}</span></span>
+                <span>Total: <span className="text-neutral-200 tabular-nums">{formatAmount(cryptoAllocations.reduce((s, a) => s + a.buyAmount, 0) + cryptoAllocations.reduce((s, a) => s + a.sellAmount, 0))}</span></span>
               </span>
             </div>
 
             <div className="px-5 py-4 border-b border-neutral-800">
               <div className="h-5 rounded-lg overflow-hidden flex">
-                {allocations.map((a, i) => {
-                  const pct = totalAllocated > 0 ? (Math.abs(a.totalAmount) / totalAllocated) * 100 : 0;
+                {cryptoAllocations.map((a, i) => {
+                  const pct = totalCryptoAllocated > 0 ? (Math.abs(a.totalAmount) / totalCryptoAllocated) * 100 : 0;
                   const colors = ["#f59e0b","#22d3ee","#a78bfa","#34d399","#f472b6","#fb923c","#60a5fa","#4ade80"];
                   return (
                     <div
@@ -606,7 +643,6 @@ export default function AuswertungPage() {
                 })}
               </div>
             </div>
-            {/* Tabellen-Header */}
             <div className="grid grid-cols-[auto_1fr_repeat(6,auto)] items-center gap-x-4 px-5 py-2 border-b border-neutral-800 text-xs text-neutral-500">
               <span className="w-2.5" />
               <span>Coin</span>
@@ -618,8 +654,8 @@ export default function AuswertungPage() {
               <span className="text-right w-14">Anteil</span>
             </div>
             <div className="divide-y divide-neutral-800">
-              {allocations.slice(0, 10).map((alloc, idx) => {
-                const pct = totalAllocated > 0 ? (Math.abs(alloc.totalAmount) / totalAllocated) * 100 : 0;
+              {cryptoAllocations.slice(0, 10).map((alloc, idx) => {
+                const pct = totalCryptoAllocated > 0 ? (Math.abs(alloc.totalAmount) / totalCryptoAllocated) * 100 : 0;
                 const colors = ["#f59e0b","#22d3ee","#a78bfa","#34d399","#f472b6","#fb923c","#60a5fa","#4ade80"];
                 const priceUsd = prices[alloc.name.toUpperCase()] ?? null;
                 const coinCount = priceUsd && priceUsd > 0 ? Math.abs(alloc.totalAmount) / priceUsd : null;
@@ -650,16 +686,16 @@ export default function AuswertungPage() {
                   </div>
                 );
               })}
-              {allocations.length > 10 && (
+              {cryptoAllocations.length > 10 && (
                 <>
                   <button
                     onClick={() => setCoinsExpanded(!coinsExpanded)}
                     className="w-full flex justify-end px-5 py-2 text-sm text-amber-400 hover:text-amber-300 transition-colors"
                   >
-                    {coinsExpanded ? "Weniger ▲" : `+${allocations.length - 10} weitere ▼`}
+                    {coinsExpanded ? "Weniger ▲" : `+${cryptoAllocations.length - 10} weitere ▼`}
                   </button>
-                  {coinsExpanded && allocations.slice(10).map((alloc, idx) => {
-                    const pct = totalAllocated > 0 ? (Math.abs(alloc.totalAmount) / totalAllocated) * 100 : 0;
+                  {coinsExpanded && cryptoAllocations.slice(10).map((alloc, idx) => {
+                    const pct = totalCryptoAllocated > 0 ? (Math.abs(alloc.totalAmount) / totalCryptoAllocated) * 100 : 0;
                     const colors = ["#f59e0b","#22d3ee","#a78bfa","#34d399","#f472b6","#fb923c","#60a5fa","#4ade80"];
                     const priceUsd = prices[alloc.name.toUpperCase()] ?? null;
                     const coinCount = priceUsd && priceUsd > 0 ? Math.abs(alloc.totalAmount) / priceUsd : null;
@@ -692,6 +728,79 @@ export default function AuswertungPage() {
                   })}
                 </>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Rohstoff-Allokation (Gold, Silber, etc.) */}
+        {rohstoffAllocations.length > 0 && (
+          <div className="mb-8 rounded-2xl border border-neutral-800 bg-neutral-900/50 overflow-hidden">
+            <div className="px-5 py-3 border-b border-neutral-800 flex justify-between items-center flex-wrap gap-2">
+              <div className="flex items-center gap-3">
+                <span className="text-sm text-neutral-400">Rohstoff-Allokation</span>
+                {cryptoAllocations.length === 0 && (
+                  <>
+                    <button
+                      onClick={handleSaveSnapshot}
+                      disabled={saveLoading}
+                      className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs text-neutral-950 font-medium hover:bg-amber-400 disabled:opacity-50 transition-colors"
+                    >
+                      {saveLoading ? "Speichern…" : "Als Verlauf speichern"}
+                    </button>
+                    {saveStatus === "ok" && <span className="text-xs text-emerald-400">Gespeichert</span>}
+                    {saveStatus === "error" && <span className="text-xs text-red-400">Fehler beim Speichern</span>}
+                  </>
+                )}
+              </div>
+              <span className="text-sm text-neutral-500 flex items-center gap-4">
+                <span>Buy: <span className="text-emerald-400 tabular-nums">{formatAmount(rohstoffAllocations.reduce((s, a) => s + a.buyAmount, 0))}</span></span>
+                <span>Sell: <span className="text-red-400 tabular-nums">{formatAmount(rohstoffAllocations.reduce((s, a) => s + a.sellAmount, 0))}</span></span>
+                <span>Netto: <span className="text-amber-400 tabular-nums">{formatAmount(rohstoffAllocations.reduce((s, a) => s + a.buyAmount, 0) - rohstoffAllocations.reduce((s, a) => s + a.sellAmount, 0))}</span></span>
+                <span>Total: <span className="text-neutral-200 tabular-nums">{formatAmount(rohstoffAllocations.reduce((s, a) => s + a.buyAmount, 0) + rohstoffAllocations.reduce((s, a) => s + a.sellAmount, 0))}</span></span>
+              </span>
+            </div>
+            <div className="px-5 py-4 border-b border-neutral-800">
+              <div className="h-5 rounded-lg overflow-hidden flex">
+                {rohstoffAllocations.map((a, i) => {
+                  const pct = totalRohstoffAllocated > 0 ? (Math.abs(a.totalAmount) / totalRohstoffAllocated) * 100 : 0;
+                  const colors = ["#d4af37","#c0c0c0","#cd7f32","#b87333"];
+                  return (
+                    <div
+                      key={a.name}
+                      style={{ width: `${pct}%`, backgroundColor: colors[i % colors.length], minWidth: pct > 0.3 ? "2px" : "0" }}
+                      title={`${getRohstoffDisplayName(a.name)}: ${formatAmount(a.totalAmount)} (${pct.toFixed(1)}%)`}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+            <div className="grid grid-cols-[auto_1fr_auto_auto_auto_auto] items-center gap-x-4 px-5 py-2 border-b border-neutral-800 text-xs text-neutral-500">
+              <span className="w-2.5" />
+              <span>Rohstoff</span>
+              <span className="text-right w-28">Buy</span>
+              <span className="text-right w-28">Sell</span>
+              <span className="text-right w-32">Gesamt</span>
+              <span className="text-right w-14">Anteil</span>
+            </div>
+            <div className="divide-y divide-neutral-800">
+              {rohstoffAllocations.map((alloc, idx) => {
+                const pct = totalRohstoffAllocated > 0 ? (Math.abs(alloc.totalAmount) / totalRohstoffAllocated) * 100 : 0;
+                const colors = ["#d4af37","#c0c0c0","#cd7f32","#b87333"];
+                return (
+                  <div key={alloc.name} className="grid grid-cols-[auto_1fr_auto_auto_auto_auto] items-center gap-x-4 px-5 py-2.5 hover:bg-neutral-800/20">
+                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: colors[idx % colors.length] }} />
+                    <span className="text-sm text-neutral-200">{getRohstoffDisplayName(alloc.name)}</span>
+                    <span className="tabular-nums text-sm text-emerald-400 text-right w-28">
+                      {alloc.buyAmount > 0 ? formatAmount(alloc.buyAmount) : "—"}
+                    </span>
+                    <span className="tabular-nums text-sm text-red-400 text-right w-28">
+                      {alloc.sellAmount > 0 ? formatAmount(alloc.sellAmount) : "—"}
+                    </span>
+                    <span className="tabular-nums text-sm text-amber-400 text-right w-32">{formatAmount(alloc.totalAmount)}</span>
+                    <span className="tabular-nums text-sm text-neutral-500 text-right w-14">{pct.toFixed(2)}%</span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
@@ -809,7 +918,10 @@ export default function AuswertungPage() {
                                     const dbEntry = dbEntries.find((d) => d.isin.toUpperCase() === row.isincod);
                                     const etpLabel = dbEntry
                                       ? dbEntry.constituents.length === 1
-                                        ? normalizeCoinName(dbEntry.constituents[0].name)
+                                        ? (() => {
+                                            const c = normalizeCoinName(dbEntry.constituents[0].name);
+                                            return isRohstoff(c) ? getRohstoffDisplayName(c) : c;
+                                          })()
                                         : "Basket"
                                       : null;
                                     return (
