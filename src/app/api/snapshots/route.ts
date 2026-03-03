@@ -9,11 +9,33 @@ export interface SnapshotCoin {
   pct: number;
 }
 
+export interface SnapshotPositionTrade {
+  side: "B" | "S";
+  trandattim?: string;
+  instmnem: string;
+  instshtnam: string;
+  betrag: number;
+  etpLabel: string;
+}
+
+export interface SnapshotPosition {
+  iban: string;
+  tickerDisplay: string;
+  nameDisplay: string;
+  count: number;
+  buyAmount: number;
+  sellAmount: number;
+  gesamt: number;
+  etpLabel: string;
+  trades?: SnapshotPositionTrade[];
+}
+
 export interface Snapshot {
   id: string;
   snapshot_date: string;
   label: string | null;
   coins: SnapshotCoin[];
+  positions?: SnapshotPosition[] | null;
   created_at: string;
 }
 
@@ -24,7 +46,7 @@ export async function GET() {
 
   const { data, error } = await supabaseAdmin
     .from("portfolio_snapshots")
-    .select("id, snapshot_date, label, coins, created_at")
+    .select("id, snapshot_date, label, coins, positions, created_at")
     .order("snapshot_date", { ascending: false });
 
   if (error) {
@@ -46,15 +68,20 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json();
-  const { snapshot_date, label, coins } = body;
+  const { snapshot_date, label, coins, positions } = body;
 
   if (!snapshot_date || !Array.isArray(coins) || coins.length === 0) {
     return NextResponse.json({ error: "snapshot_date und coins sind erforderlich." }, { status: 400 });
   }
 
+  const insertData: Record<string, unknown> = { snapshot_date, label: label ?? null, coins };
+  if (Array.isArray(positions) && positions.length > 0) {
+    insertData.positions = positions;
+  }
+
   const { data, error } = await supabaseAdmin
     .from("portfolio_snapshots")
-    .insert({ snapshot_date, label: label ?? null, coins })
+    .insert(insertData)
     .select()
     .single();
 

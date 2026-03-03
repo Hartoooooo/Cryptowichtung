@@ -145,7 +145,10 @@ function parseCsvFile(file: File): Promise<CsvRow[]> {
         });
         const colTrandattim = headers.findIndex((h) => {
           const x = h.toLowerCase().replace(/[^a-z0-9]/g, "");
-          return x === "trandattim" || h.toLowerCase().includes("trandattim");
+          return x === "trandattim" || h.toLowerCase().includes("trandattim") ||
+            x === "datum" || x === "date" || x === "zeit" || x === "time" ||
+            x === "timestamp" || x === "datetime" || x === "transaktionsdatum" ||
+            x === "orderdate" || x === "tradedate" || x === "executiontime";
         });
 
         if (colIsin < 0) {
@@ -503,6 +506,41 @@ export default function AuswertungPage() {
       totalAmount: a.totalAmount,
       pct: totalAbs > 0 ? (Math.abs(a.totalAmount) / totalAbs) * 100 : 0,
     }));
+    const positions = aggregatedByIban.map((agg) => {
+      const positionRows = csvRows
+        .filter((row) => ((row.iban ?? "").trim() || row.isincod) === agg.iban)
+        .sort((a, b) => Math.abs(b.betrag) - Math.abs(a.betrag));
+      const trades = positionRows.map((row) => {
+        const dbEntry = dbEntries.find((d) => d.isin.toUpperCase() === row.isincod);
+        const etpLabel = dbEntry
+          ? dbEntry.constituents.length === 1
+            ? (() => {
+                const c = normalizeCoinName(dbEntry.constituents[0].name);
+                return isRohstoff(c) ? getRohstoffDisplayName(c) : c;
+              })()
+            : "Basket"
+          : "";
+        return {
+          side: row.side,
+          trandattim: row.trandattim,
+          instmnem: row.instmnem ?? "",
+          instshtnam: row.instshtnam ?? "",
+          betrag: row.betrag,
+          etpLabel,
+        };
+      });
+      return {
+        iban: agg.iban,
+        tickerDisplay: agg.tickerDisplay,
+        nameDisplay: agg.nameDisplay,
+        count: agg.count,
+        buyAmount: agg.buyAmount,
+        sellAmount: agg.sellAmount,
+        gesamt: agg.gesamt,
+        etpLabel: agg.etpLabel,
+        trades,
+      };
+    });
     try {
       const res = await fetch("/api/snapshots", {
         method: "POST",
@@ -510,6 +548,7 @@ export default function AuswertungPage() {
         body: JSON.stringify({
           snapshot_date: new Date().toISOString().slice(0, 10),
           coins,
+          positions,
         }),
       });
       setSaveStatus(res.ok ? "ok" : "error");
@@ -519,7 +558,7 @@ export default function AuswertungPage() {
       setSaveLoading(false);
       setTimeout(() => setSaveStatus("idle"), 3000);
     }
-  }, [allocations]);
+  }, [allocations, aggregatedByIban, csvRows, dbEntries]);
 
   const totalAllocated = allocations.reduce((s, a) => s + Math.abs(a.totalAmount), 0);
 

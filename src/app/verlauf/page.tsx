@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, Fragment } from "react";
 import Link from "next/link";
+import PositionsTradesChartSection from "@/components/verlauf/PositionsTradesChartSection";
 
 interface SnapshotCoin {
   name: string;
@@ -11,11 +12,33 @@ interface SnapshotCoin {
   pct: number;
 }
 
+interface SnapshotPositionTrade {
+  side: "B" | "S";
+  trandattim?: string;
+  instmnem: string;
+  instshtnam: string;
+  betrag: number;
+  etpLabel: string;
+}
+
+interface SnapshotPosition {
+  iban: string;
+  tickerDisplay: string;
+  nameDisplay: string;
+  count: number;
+  buyAmount: number;
+  sellAmount: number;
+  gesamt: number;
+  etpLabel: string;
+  trades?: SnapshotPositionTrade[];
+}
+
 interface Snapshot {
   id: string;
   snapshot_date: string;
   label: string | null;
   coins: SnapshotCoin[];
+  positions?: SnapshotPosition[] | null;
   created_at: string;
 }
 
@@ -35,6 +58,18 @@ function formatDate(dateStr: string) {
   });
 }
 
+function extractTimeFromTrandattim(raw: string | undefined): string {
+  if (!raw || !raw.trim()) return "—";
+  const s = raw.trim();
+  const timeOnly = s.match(/^\d{1,2}:\d{2}(:\d{2})?/);
+  if (timeOnly) return timeOnly[0];
+  const inStr = s.match(/\d{1,2}:\d{2}(:\d{2})?/);
+  if (inStr) return inStr[0];
+  const compact = s.match(/(\d{2})(\d{2})(\d{2})?$/);
+  if (compact) return compact[3] ? `${compact[1]}:${compact[2]}:${compact[3]}` : `${compact[1]}:${compact[2]}`;
+  return "—";
+}
+
 export default function VerlaufPage() {
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [loading, setLoading] = useState(true);
@@ -42,6 +77,13 @@ export default function VerlaufPage() {
   const [selectedCoin, setSelectedCoin] = useState<string | null>(null);
   const [selectedSnapshot, setSelectedSnapshot] = useState<Snapshot | null>(null);
   const [chartMetric, setChartMetric] = useState<"pct" | "totalAmount" | "buyAmount" | "sellAmount">("pct");
+  const [positionSearch, setPositionSearch] = useState("");
+  const [selectedPosition, setSelectedPosition] = useState<string | null>(null);
+
+  useEffect(() => {
+    setPositionSearch("");
+    setSelectedPosition(null);
+  }, [selectedSnapshot?.id]);
 
   useEffect(() => {
     fetch("/api/snapshots")
@@ -55,6 +97,19 @@ export default function VerlaufPage() {
       .catch(() => setError("Fehler beim Laden"))
       .finally(() => setLoading(false));
   }, []);
+
+  // Gefilterte Positionen nach Kürzel/ISIN-Suche
+  const filteredPositions = useMemo(() => {
+    if (!selectedSnapshot?.positions) return [];
+    const q = positionSearch.trim().toLowerCase();
+    if (!q) return selectedSnapshot.positions;
+    return selectedSnapshot.positions.filter(
+      (p) =>
+        (p.iban ?? "").toLowerCase().includes(q) ||
+        (p.tickerDisplay ?? "").toLowerCase().includes(q) ||
+        (p.nameDisplay ?? "").toLowerCase().includes(q)
+    );
+  }, [selectedSnapshot?.positions, positionSearch]);
 
   // Alle einzigartigen Coins über alle Snapshots
   const allCoins = useMemo(() => {
@@ -116,8 +171,12 @@ export default function VerlaufPage() {
   snapshot_date date NOT NULL,
   label text,
   coins jsonb NOT NULL,
+  positions jsonb,
   created_at timestamptz DEFAULT now()
-);`}
+);
+
+-- Falls die Tabelle schon existiert, nur die Spalte hinzufügen:
+-- ALTER TABLE portfolio_snapshots ADD COLUMN IF NOT EXISTS positions jsonb;`}
                 </code>
               </p>
             )}
@@ -131,6 +190,8 @@ export default function VerlaufPage() {
         )}
 
         {snapshots.length > 0 && (
+          <>
+            <PositionsTradesChartSection snapshots={snapshots} selectedSnapshot={selectedSnapshot} />
           <div className="grid grid-cols-1 xl:grid-cols-4 gap-8">
 
             {/* Snapshot-Liste links */}
@@ -149,7 +210,10 @@ export default function VerlaufPage() {
                   >
                     <p className="text-sm text-neutral-200 font-medium">{formatDate(s.snapshot_date)}</p>
                     {s.label && <p className="text-xs text-neutral-500 mt-0.5">{s.label}</p>}
-                    <p className="text-xs text-neutral-600 mt-0.5">{s.coins.length} Coins</p>
+                    <p className="text-xs text-neutral-600 mt-0.5">
+                      {s.coins.length} Coins
+                      {s.positions && s.positions.length > 0 && ` · ${s.positions.length} Positionen`}
+                    </p>
                   </button>
                 ))}
               </div>
@@ -185,8 +249,8 @@ export default function VerlaufPage() {
                     </div>
                   </div>
 
-                  {/* Coin-Tabelle */}
-                  <div className="overflow-x-auto">
+                  {/* Coin-Tabelle (zuerst) */}
+                  <div className="overflow-x-auto border-b border-neutral-800">
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="text-left text-neutral-500 border-b border-neutral-800 bg-neutral-900">
@@ -217,6 +281,126 @@ export default function VerlaufPage() {
                       </tbody>
                     </table>
                   </div>
+
+                  {/* Größte Positionen (wie Auswertungs-Seite, mit Suche, max 10 sichtbar + Scroll) */}
+                  {selectedSnapshot.positions && selectedSnapshot.positions.length > 0 && (
+                    <div className="border-t border-neutral-800">
+                      <div className="px-5 py-3 border-b border-neutral-800 flex flex-wrap items-center justify-between gap-3">
+                        <span className="text-sm text-neutral-400">Größte Positionen ({filteredPositions.length})</span>
+                        <input
+                          type="text"
+                          value={positionSearch}
+                          onChange={(e) => setPositionSearch(e.target.value)}
+                          placeholder="Suche Kürzel/ISIN"
+                          className="rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-200 placeholder-neutral-500 focus:border-amber-500 focus:outline-none w-40"
+                        />
+                      </div>
+                      <div className="overflow-x-auto max-h-[28rem] overflow-y-auto">
+                        <table className="w-full text-sm">
+                          <thead className="sticky top-0 bg-neutral-900 z-10">
+                            <tr className="text-left text-neutral-500 border-b border-neutral-800">
+                              <th className="px-5 py-3 font-normal">ISIN</th>
+                              <th className="px-5 py-3 font-normal">Kürzel</th>
+                              <th className="px-5 py-3 font-normal">Name</th>
+                              <th className="px-5 py-3 font-normal text-right w-16">Trades</th>
+                              <th className="px-5 py-3 font-normal text-right">Buy</th>
+                              <th className="px-5 py-3 font-normal text-right">Sell</th>
+                              <th className="px-5 py-3 font-normal text-right">Gesamt</th>
+                              <th className="px-5 py-3 font-normal text-center w-24">Crypto</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filteredPositions.map((pos) => {
+                              const trades = pos.trades ?? [];
+                              const isExpanded = selectedPosition === pos.iban;
+                              return (
+                                <Fragment key={pos.iban}>
+                                  <tr
+                                    onClick={() => setSelectedPosition(isExpanded ? null : pos.iban)}
+                                    className={`border-b border-neutral-800/50 hover:bg-neutral-800/20 cursor-pointer transition-colors ${isExpanded ? "bg-amber-500/10" : ""}`}
+                                  >
+                                    <td className="px-5 py-2 font-mono text-neutral-200 truncate max-w-[200px]">{pos.iban}</td>
+                                    <td className="px-5 py-2 font-mono text-neutral-400 text-sm">{pos.tickerDisplay}</td>
+                                    <td className="px-5 py-2 text-neutral-300 truncate max-w-[180px]" title={pos.nameDisplay}>{pos.nameDisplay}</td>
+                                    <td className="px-5 py-2 text-right tabular-nums text-neutral-400">{pos.count}</td>
+                                    <td className="px-5 py-2 text-right tabular-nums text-emerald-400">{pos.buyAmount !== 0 ? formatAmount(pos.buyAmount) : "—"}</td>
+                                    <td className="px-5 py-2 text-right tabular-nums text-red-400">{pos.sellAmount !== 0 ? formatAmount(pos.sellAmount) : "—"}</td>
+                                    <td className="px-5 py-2 text-right tabular-nums text-amber-400">{formatAmount(pos.gesamt)}</td>
+                                    <td className="px-5 py-2 text-center">
+                                      {pos.etpLabel ? (
+                                        <span className="inline-block px-2 py-0.5 rounded text-xs bg-amber-500/15 text-amber-400 font-medium">
+                                          {pos.etpLabel}
+                                        </span>
+                                      ) : (
+                                        <span className="text-neutral-600">—</span>
+                                      )}
+                                    </td>
+                                  </tr>
+                                  {isExpanded && trades.length > 0 && (
+                                    <tr>
+                                      <td colSpan={8} className="p-0 align-top bg-neutral-900/80 border-b border-neutral-800/50">
+                                        <div className="px-5 py-3 flex justify-between items-center flex-wrap gap-2 border-b border-neutral-800/50">
+                                          <span className="text-sm text-neutral-400">
+                                            {trades.length} Trades für {pos.iban}
+                                          </span>
+                                          <button
+                                            type="button"
+                                            onClick={(e) => { e.stopPropagation(); setSelectedPosition(null); }}
+                                            className="text-xs text-neutral-500 hover:text-neutral-300"
+                                          >
+                                            Schließen
+                                          </button>
+                                        </div>
+                                        <div className="overflow-x-auto max-h-64 overflow-y-auto">
+                                          <table className="w-full text-sm">
+                                            <thead className="sticky top-0 bg-neutral-900 z-10">
+                                              <tr className="text-left text-neutral-500 border-b border-neutral-800">
+                                                <th className="px-5 py-2 font-normal">B/S</th>
+                                                <th className="px-5 py-2 font-normal w-20">Uhrzeit</th>
+                                                <th className="px-5 py-2 font-normal">Kürzel</th>
+                                                <th className="px-5 py-2 font-normal">Name</th>
+                                                <th className="px-5 py-2 font-normal text-right">Betrag</th>
+                                                <th className="px-5 py-2 font-normal text-center w-20">Crypto</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody>
+                                              {trades.map((t, idx) => (
+                                                <tr key={idx} className="border-b border-neutral-800/50 hover:bg-neutral-800/20">
+                                                  <td className="px-5 py-2">
+                                                    <span className={`inline-block px-2 py-0.5 rounded text-xs ${t.side === "B" ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"}`}>
+                                                      {t.side === "B" ? "Buy" : "Sell"}
+                                                    </span>
+                                                  </td>
+                                                  <td className="px-5 py-2 font-mono text-neutral-400 tabular-nums">{extractTimeFromTrandattim(t.trandattim)}</td>
+                                                  <td className="px-5 py-2 font-mono text-neutral-400">{t.instmnem || "—"}</td>
+                                                  <td className="px-5 py-2 text-neutral-300 truncate max-w-[160px]" title={t.instshtnam}>{t.instshtnam || "—"}</td>
+                                                  <td className="px-5 py-2 text-right tabular-nums text-neutral-200">{formatAmount(t.betrag)}</td>
+                                                  <td className="px-5 py-2 text-center">
+                                                    {t.etpLabel ? <span className="text-xs text-amber-400">{t.etpLabel}</span> : "—"}
+                                                  </td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  )}
+                                  {isExpanded && trades.length === 0 && (
+                                    <tr>
+                                      <td colSpan={8} className="px-5 py-3 text-sm text-neutral-500 bg-neutral-900/80 border-b border-neutral-800/50">
+                                        Keine Detail-Trades für diese Position gespeichert (Snapshot vor Update erstellt).
+                                      </td>
+                                    </tr>
+                                  )}
+                                </Fragment>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -322,6 +506,7 @@ export default function VerlaufPage() {
               </div>
             </div>
           </div>
+          </>
         )}
       </div>
     </div>
