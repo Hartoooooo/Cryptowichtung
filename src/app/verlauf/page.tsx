@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo, Fragment } from "react";
 import Link from "next/link";
 import PositionsTradesChartSection from "@/components/verlauf/PositionsTradesChartSection";
+import CustomSelectDropdown from "@/components/ui/CustomSelectDropdown";
 
 interface SnapshotCoin {
   name: string;
@@ -18,6 +19,8 @@ interface SnapshotPositionTrade {
   instmnem: string;
   instshtnam: string;
   betrag: number;
+  ordrqty?: number;
+  price?: number;
   etpLabel: string;
 }
 
@@ -51,6 +54,16 @@ const COLORS = [
 function formatAmount(n: number) {
   return n.toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+/** Ordermenge/Stückpreis: Komma als Dezimaltrenner, bis 4 Nachkommastellen, ,00 wenn ganzzahlig */
+function formatDecimalDe(n: number) {
+  return n.toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+}
+/** Ordermenge: ganzzahlig ohne ,00, sonst Komma mit Nachkommastellen */
+function formatOrdrqty(n: number) {
+  return n % 1 === 0
+    ? n.toLocaleString("de-DE", { maximumFractionDigits: 0 })
+    : n.toLocaleString("de-DE", { minimumFractionDigits: 1, maximumFractionDigits: 4 });
+}
 
 function formatDate(dateStr: string) {
   return new Date(dateStr).toLocaleDateString("de-DE", {
@@ -79,11 +92,17 @@ export default function VerlaufPage() {
   const [chartMetric, setChartMetric] = useState<"pct" | "totalAmount" | "buyAmount" | "sellAmount">("pct");
   const [positionSearch, setPositionSearch] = useState("");
   const [selectedPosition, setSelectedPosition] = useState<string | null>(null);
+  const [positionsPageSize, setPositionsPageSize] = useState<15 | 50 | 100>(15);
+  const [positionsVisibleCount, setPositionsVisibleCount] = useState(15);
 
   useEffect(() => {
     setPositionSearch("");
     setSelectedPosition(null);
   }, [selectedSnapshot?.id]);
+
+  useEffect(() => {
+    setPositionsVisibleCount(positionsPageSize);
+  }, [positionsPageSize, selectedSnapshot?.id, positionSearch]);
 
   useEffect(() => {
     fetch("/api/snapshots")
@@ -153,7 +172,7 @@ export default function VerlaufPage() {
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 font-sans antialiased">
-      <div className="mx-auto max-w-7xl px-6 py-12">
+      <div className="mx-auto max-w-screen-2xl px-6 py-12">
         <div className="mb-8">
           <h1 className="text-2xl tracking-tight text-neutral-100 mb-1">Verlauf</h1>
           <p className="text-neutral-400 text-sm">Tagesweise gespeicherte Portfolio-Auswertungen</p>
@@ -191,36 +210,12 @@ export default function VerlaufPage() {
 
         {snapshots.length > 0 && (
           <>
-            <PositionsTradesChartSection snapshots={snapshots} selectedSnapshot={selectedSnapshot} />
-          <div className="grid grid-cols-1 xl:grid-cols-4 gap-8">
-
-            {/* Snapshot-Liste links */}
-            <div className="xl:col-span-1 rounded-2xl border border-neutral-800 bg-neutral-900/50 overflow-hidden self-start">
-              <div className="px-4 py-3 border-b border-neutral-800 text-sm text-neutral-400">
-                {snapshots.length} Einträge
-              </div>
-              <div className="max-h-[600px] overflow-y-auto">
-                {snapshots.map((s) => (
-                  <button
-                    key={s.id}
-                    onClick={() => setSelectedSnapshot(s)}
-                    className={`w-full text-left px-4 py-3 border-b border-neutral-800/50 hover:bg-neutral-800/40 transition-colors ${
-                      selectedSnapshot?.id === s.id ? "bg-amber-500/10 border-l-2 border-l-amber-500" : ""
-                    }`}
-                  >
-                    <p className="text-sm text-neutral-200 font-medium">{formatDate(s.snapshot_date)}</p>
-                    {s.label && <p className="text-xs text-neutral-500 mt-0.5">{s.label}</p>}
-                    <p className="text-xs text-neutral-600 mt-0.5">
-                      {s.coins.length} Coins
-                      {s.positions && s.positions.length > 0 && ` · ${s.positions.length} Positionen`}
-                    </p>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Hauptbereich rechts */}
-            <div className="xl:col-span-3 space-y-6">
+            <PositionsTradesChartSection
+              snapshots={snapshots}
+              selectedSnapshot={selectedSnapshot}
+              onSelectedSnapshotChange={setSelectedSnapshot}
+            />
+          <div className="space-y-6">
 
               {/* Snapshot-Details */}
               {selectedSnapshot && (
@@ -249,51 +244,66 @@ export default function VerlaufPage() {
                     </div>
                   </div>
 
-                  {/* Coin-Tabelle (zuerst) */}
-                  <div className="overflow-x-auto border-b border-neutral-800">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="text-left text-neutral-500 border-b border-neutral-800 bg-neutral-900">
-                          <th className="px-5 py-3 font-normal">Coin</th>
-                          <th className="px-5 py-3 font-normal text-right">Buy</th>
-                          <th className="px-5 py-3 font-normal text-right">Sell</th>
-                          <th className="px-5 py-3 font-normal text-right">Gesamt</th>
-                          <th className="px-5 py-3 font-normal text-right">Anteil</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {[...selectedSnapshot.coins]
-                          .sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct))
-                          .map((c, i) => (
-                            <tr key={c.name} className="border-b border-neutral-800/50 hover:bg-neutral-800/20">
-                              <td className="px-5 py-3">
-                                <div className="flex items-center gap-2">
-                                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: COLORS[i % COLORS.length] }} />
-                                  <span className="text-neutral-200">{c.name}</span>
-                                </div>
-                              </td>
-                              <td className="px-5 py-3 text-right tabular-nums text-emerald-400">{formatAmount(c.buyAmount)}</td>
-                              <td className="px-5 py-3 text-right tabular-nums text-red-400">{formatAmount(c.sellAmount)}</td>
-                              <td className="px-5 py-3 text-right tabular-nums text-amber-400">{formatAmount(c.totalAmount)}</td>
-                              <td className="px-5 py-3 text-right tabular-nums text-neutral-400">{c.pct.toFixed(2)}%</td>
-                            </tr>
-                          ))}
-                      </tbody>
-                    </table>
+                  {/* Coin-Tabelle: 2 pro Zeile, kleinerer Text */}
+                  <div className="border-b border-neutral-800 px-5 py-3">
+                    <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs">
+                      {[...selectedSnapshot.coins]
+                        .sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct))
+                        .map((c, i) => (
+                          <div
+                            key={c.name}
+                            className="flex items-center justify-between gap-2 py-1.5 border-b border-neutral-800/40 hover:bg-neutral-800/20 rounded px-2 -mx-2"
+                          >
+                            <div className="flex items-center gap-1.5 min-w-0 shrink">
+                              <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: COLORS[i % COLORS.length] }} />
+                              <span className="text-neutral-200 truncate">{c.name}</span>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0 tabular-nums">
+                              <span className="text-emerald-400">{formatAmount(c.buyAmount)}</span>
+                              <span className="text-red-400">{formatAmount(c.sellAmount)}</span>
+                              <span className="text-amber-400">{formatAmount(c.totalAmount)}</span>
+                              <span className="text-neutral-400 w-11 text-right">{c.pct.toFixed(2)}%</span>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
                   </div>
 
                   {/* Größte Positionen (wie Auswertungs-Seite, mit Suche, max 10 sichtbar + Scroll) */}
                   {selectedSnapshot.positions && selectedSnapshot.positions.length > 0 && (
                     <div className="border-t border-neutral-800">
                       <div className="px-5 py-3 border-b border-neutral-800 flex flex-wrap items-center justify-between gap-3">
-                        <span className="text-sm text-neutral-400">Größte Positionen ({filteredPositions.length})</span>
-                        <input
-                          type="text"
-                          value={positionSearch}
-                          onChange={(e) => setPositionSearch(e.target.value)}
-                          placeholder="Suche Kürzel/ISIN"
-                          className="rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-200 placeholder-neutral-500 focus:border-amber-500 focus:outline-none w-40"
-                        />
+                        <span className="text-sm text-neutral-400">Größte Positionen (Gesamt: {filteredPositions.length})</span>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={positionSearch}
+                            onChange={(e) => setPositionSearch(e.target.value)}
+                            placeholder="Suche Kürzel/ISIN"
+                            className="rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-200 placeholder-neutral-500 focus:border-amber-500 focus:outline-none w-40"
+                          />
+                          <span className="text-xs text-neutral-500">Anzeigen:</span>
+                          <CustomSelectDropdown
+                            value={String(positionsPageSize)}
+                            onChange={(v) => setPositionsPageSize(Number(v) as 15 | 50 | 100)}
+                            options={[
+                              { value: "15", label: "15" },
+                              { value: "50", label: "50" },
+                              { value: "100", label: "100" },
+                            ]}
+                            placeholder="15"
+                            minWidth="60px"
+                          />
+                          {positionsVisibleCount < filteredPositions.length && (
+                            <button
+                              type="button"
+                              onClick={() => setPositionsVisibleCount((n) => Math.min(n + positionsPageSize, filteredPositions.length))}
+                              className="rounded-lg border border-neutral-700 bg-neutral-800/80 px-2 py-1.5 text-xs text-neutral-200 hover:bg-neutral-700/80 transition-colors"
+                            >
+                              Weiter ({Math.min(positionsPageSize, filteredPositions.length - positionsVisibleCount)} mehr)
+                            </button>
+                          )}
+                        </div>
                       </div>
                       <div className="overflow-x-auto max-h-[28rem] overflow-y-auto">
                         <table className="w-full text-sm">
@@ -310,7 +320,7 @@ export default function VerlaufPage() {
                             </tr>
                           </thead>
                           <tbody>
-                            {filteredPositions.map((pos) => {
+                            {filteredPositions.slice(0, positionsVisibleCount).map((pos) => {
                               const trades = pos.trades ?? [];
                               const isExpanded = selectedPosition === pos.iban;
                               return (
@@ -359,6 +369,8 @@ export default function VerlaufPage() {
                                                 <th className="px-5 py-2 font-normal w-20">Uhrzeit</th>
                                                 <th className="px-5 py-2 font-normal">Kürzel</th>
                                                 <th className="px-5 py-2 font-normal">Name</th>
+                                                <th className="px-5 py-2 font-normal text-right">Ordermenge</th>
+                                                <th className="px-5 py-2 font-normal text-right">Stückpreis</th>
                                                 <th className="px-5 py-2 font-normal text-right">Betrag</th>
                                                 <th className="px-5 py-2 font-normal text-center w-20">Crypto</th>
                                               </tr>
@@ -374,7 +386,9 @@ export default function VerlaufPage() {
                                                   <td className="px-5 py-2 font-mono text-neutral-400 tabular-nums">{extractTimeFromTrandattim(t.trandattim)}</td>
                                                   <td className="px-5 py-2 font-mono text-neutral-400">{t.instmnem || "—"}</td>
                                                   <td className="px-5 py-2 text-neutral-300 truncate max-w-[160px]" title={t.instshtnam}>{t.instshtnam || "—"}</td>
-                                                  <td className="px-5 py-2 text-right tabular-nums text-neutral-200">{formatAmount(t.betrag)}</td>
+                                                  <td className="px-5 py-2 text-right tabular-nums text-neutral-400">{t.ordrqty != null ? formatOrdrqty(t.ordrqty) : "—"}</td>
+                                                  <td className="px-5 py-2 text-right tabular-nums text-neutral-400">{t.price != null ? formatDecimalDe(t.price) : "—"}</td>
+                                                  <td className="px-5 py-2 text-right tabular-nums text-neutral-200">{formatDecimalDe(t.betrag)}</td>
                                                   <td className="px-5 py-2 text-center">
                                                     {t.etpLabel ? <span className="text-xs text-amber-400">{t.etpLabel}</span> : "—"}
                                                   </td>
@@ -409,16 +423,13 @@ export default function VerlaufPage() {
                 <div className="px-5 py-3 border-b border-neutral-800 flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-3 flex-wrap">
                     <span className="text-sm text-neutral-400">Coin-Verlauf</span>
-                    <select
+                    <CustomSelectDropdown
                       value={selectedCoin ?? ""}
-                      onChange={(e) => setSelectedCoin(e.target.value || null)}
-                      className="rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-sm text-neutral-200 focus:border-amber-500 focus:outline-none"
-                    >
-                      <option value="">— Coin wählen —</option>
-                      {allCoins.map((c) => (
-                        <option key={c} value={c}>{c}</option>
-                      ))}
-                    </select>
+                      onChange={(v) => setSelectedCoin(v || null)}
+                      options={allCoins.map((c) => ({ value: c, label: c }))}
+                      placeholder="Coin wählen"
+                      minWidth="120px"
+                    />
                   </div>
                   <div className="flex rounded-lg border border-neutral-700 overflow-hidden text-xs">
                     {(["pct", "totalAmount", "buyAmount", "sellAmount"] as const).map((m) => (
@@ -504,7 +515,6 @@ export default function VerlaufPage() {
                   </div>
                 )}
               </div>
-            </div>
           </div>
           </>
         )}

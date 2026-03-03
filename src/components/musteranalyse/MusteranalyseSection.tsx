@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useMemo, useCallback } from "react";
+import CustomSelectDropdown from "@/components/ui/CustomSelectDropdown";
 import type { NormalizedTrade, BucketSize, Insight } from "@/lib/pattern-engine/types";
 import { runPatternEngine, csvRowsToTrades } from "@/lib/pattern-engine";
 import HeatmapChart, { type HeatmapBucket } from "./HeatmapChart";
@@ -120,19 +121,21 @@ export default function MusteranalyseSection({ csvRows }: MusteranalyseSectionPr
 
       <div className="px-5 py-4 space-y-4">
         {/* Controls */}
-        <div className="flex flex-wrap gap-4 items-center">
+          <div className="flex flex-wrap gap-4 items-center">
           <div className="flex items-center gap-2">
             <span className="text-xs text-neutral-500">Bucket:</span>
-            <select
+            <CustomSelectDropdown
               value={bucketSize}
-              onChange={(e) => setBucketSize(e.target.value as BucketSize)}
-              className="rounded-lg border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-sm text-neutral-200"
-            >
-              <option value="1m">1m</option>
-              <option value="5m">5m</option>
-              <option value="15m">15m</option>
-              <option value="60m">60m</option>
-            </select>
+              onChange={(v) => setBucketSize(v as BucketSize)}
+              options={[
+                { value: "1m", label: "1m" },
+                { value: "5m", label: "5m" },
+                { value: "15m", label: "15m" },
+                { value: "60m", label: "60m" },
+              ]}
+              placeholder="15m"
+              minWidth="60px"
+            />
           </div>
           <div className="flex items-center gap-2">
             <span className="text-xs text-neutral-500">Symbol:</span>
@@ -146,15 +149,17 @@ export default function MusteranalyseSection({ csvRows }: MusteranalyseSectionPr
           </div>
           <div className="flex items-center gap-2">
             <span className="text-xs text-neutral-500">Side:</span>
-            <select
+            <CustomSelectDropdown
               value={sideFilter}
-              onChange={(e) => setSideFilter(e.target.value as "all" | "BUY" | "SELL")}
-              className="rounded-lg border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-sm text-neutral-200"
-            >
-              <option value="all">Alle</option>
-              <option value="BUY">Buy</option>
-              <option value="SELL">Sell</option>
-            </select>
+              onChange={(v) => setSideFilter(v as "all" | "BUY" | "SELL")}
+              options={[
+                { value: "all", label: "Alle" },
+                { value: "BUY", label: "Buy" },
+                { value: "SELL", label: "Sell" },
+              ]}
+              placeholder="Alle"
+              minWidth="70px"
+            />
           </div>
         </div>
 

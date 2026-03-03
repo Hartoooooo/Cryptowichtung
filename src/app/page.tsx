@@ -207,7 +207,7 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 font-sans antialiased">
-      <div className="mx-auto max-w-7xl px-6 py-12">
+      <div className="mx-auto max-w-screen-2xl px-6 py-12">
         <div className="mb-8">
           <h1 className="text-2xl tracking-tight text-neutral-100 mb-2">
             Gewichtung

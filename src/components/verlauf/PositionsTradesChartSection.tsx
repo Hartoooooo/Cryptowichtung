@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState, useRef, useEffect } from "react";
+import CustomSelectDropdown from "@/components/ui/CustomSelectDropdown";
 import {
   BarChart,
   Bar,
@@ -24,6 +25,8 @@ interface SnapshotPositionTrade {
   instmnem: string;
   instshtnam: string;
   betrag: number;
+  ordrqty?: number;
+  price?: number;
   etpLabel: string;
 }
 
@@ -54,6 +57,16 @@ const CHART_COLORS = [
 
 function formatAmount(n: number) {
   return n.toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+/** Ordermenge/Stückpreis: Komma als Dezimaltrenner, bis 4 Nachkommastellen, ,00 wenn ganzzahlig */
+function formatDecimalDe(n: number) {
+  return n.toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+}
+/** Ordermenge: ganzzahlig ohne ,00, sonst Komma mit Nachkommastellen */
+function formatOrdrqty(n: number) {
+  return n % 1 === 0
+    ? n.toLocaleString("de-DE", { maximumFractionDigits: 0 })
+    : n.toLocaleString("de-DE", { minimumFractionDigits: 1, maximumFractionDigits: 4 });
 }
 
 function formatAxisValue(v: number): string {
@@ -167,98 +180,6 @@ function LineFilterDropdown({
   );
 }
 
-function CustomSelectDropdown({
-  value,
-  onChange,
-  options,
-  placeholder,
-  minWidth = "88px",
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  options: { value: string; label: string }[];
-  placeholder: string;
-  minWidth?: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const h = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
-  }, []);
-  const current = options.find((o) => o.value === value);
-  return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1.5 rounded-lg border border-neutral-700 bg-neutral-900/80 px-2.5 py-1.5 text-xs text-neutral-200 transition-all hover:border-neutral-600 hover:bg-neutral-800/80 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500/30 cursor-pointer shrink-0"
-        style={{ minWidth }}
-      >
-        <span className="flex-1 text-left truncate">{current?.label ?? placeholder}</span>
-        <svg
-          className={`h-3 w-3 shrink-0 text-neutral-500 transition-transform ${open ? "rotate-180" : ""}`}
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
-      {open && (
-        <div className="absolute top-full left-0 z-50 mt-1 w-full min-w-[140px] max-h-48 overflow-y-auto overflow-hidden rounded-lg border border-neutral-700 bg-neutral-900 shadow-xl shadow-black/20">
-          <button
-            type="button"
-            onClick={() => {
-              onChange("");
-              setOpen(false);
-            }}
-            className={`flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs transition-colors cursor-pointer ${
-              !value ? "bg-amber-500/15 text-amber-400" : "text-neutral-300 hover:bg-neutral-800 hover:text-neutral-100"
-            }`}
-          >
-            <span className="w-3 shrink-0 flex items-center justify-center">
-              {!value && (
-                <svg className="h-3 w-3 text-amber-400" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                </svg>
-              )}
-            </span>
-            <span className={!value ? "font-medium" : ""}>— {placeholder} —</span>
-          </button>
-          {options.map((opt) => (
-            <button
-              key={opt.value}
-              type="button"
-              onClick={() => {
-                onChange(opt.value);
-                setOpen(false);
-              }}
-              className={`flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs transition-colors cursor-pointer ${
-                opt.value === value
-                  ? "bg-amber-500/15 text-amber-400"
-                  : "text-neutral-300 hover:bg-neutral-800 hover:text-neutral-100"
-              }`}
-            >
-              <span className="w-3 shrink-0 flex items-center justify-center">
-                {opt.value === value && (
-                  <svg className="h-3 w-3 text-amber-400" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                  </svg>
-                )}
-              </span>
-              <span className={opt.value === value ? "font-medium" : ""}>{opt.label}</span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function getWeekKey(dateStr: string): string {
   const d = new Date(dateStr);
   const start = new Date(d);
@@ -276,10 +197,11 @@ type ViewMode = "overview" | "compare" | "intraday";
 interface PositionsTradesChartSectionProps {
   snapshots: Snapshot[];
   selectedSnapshot?: Snapshot | null;
+  onSelectedSnapshotChange?: (snapshot: Snapshot) => void;
 }
 
-export default function PositionsTradesChartSection({ snapshots, selectedSnapshot }: PositionsTradesChartSectionProps) {
-  const [viewMode, setViewMode] = useState<ViewMode>("overview");
+export default function PositionsTradesChartSection({ snapshots, selectedSnapshot, onSelectedSnapshotChange }: PositionsTradesChartSectionProps) {
+  const [viewMode, setViewMode] = useState<ViewMode>("intraday");
   const [granularity, setGranularity] = useState<PeriodGranularity>("day");
   const [periodA, setPeriodA] = useState<string>("");
   const [periodB, setPeriodB] = useState<string>("");
@@ -291,6 +213,11 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
   const [intradayFilter, setIntradayFilter] = useState<string>("");
   const intradaySearchRef = useRef<HTMLInputElement>(null);
   const [intradayLineFilter, setIntradayLineFilter] = useState<"all" | "buy" | "sell" | "trades">("all");
+  const [tradesPageSize, setTradesPageSize] = useState<15 | 50 | 100>(15);
+  const [tradesVisibleCount, setTradesVisibleCount] = useState(15);
+  useEffect(() => {
+    setTradesVisibleCount(tradesPageSize);
+  }, [tradesPageSize, selectedSnapshot?.id, intradayFilter]);
 
   const getPeriodKey = (dateStr: string) => {
     switch (granularity) {
@@ -405,6 +332,18 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
       }));
   }, [snapshots, selectedSnapshot]);
 
+  const totalPositionCountAndValue = useMemo(() => {
+    const source = selectedSnapshot ?? snapshots[0];
+    const positions = source?.positions ?? [];
+    const valid = positions.filter((p): p is SnapshotPosition => p != null && typeof p === "object");
+    let totalValue = 0;
+    for (const p of valid) {
+      const gesamt = typeof p.gesamt === "number" && !Number.isNaN(p.gesamt) ? p.gesamt : toNum(p.buyAmount) - toNum(p.sellAmount);
+      totalValue += gesamt;
+    }
+    return { count: valid.length, totalValue };
+  }, [snapshots, selectedSnapshot]);
+
   const tradeVolumeOverTime = useMemo(() => {
     return aggregatedPeriods.map((p) => ({
       ...p,
@@ -446,6 +385,8 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
       minuteOfDay: number;
       side: "B" | "S";
       betrag: number;
+      ordrqty?: number;
+      price?: number;
       instmnem: string;
       instshtnam: string;
       etpLabel: string;
@@ -464,6 +405,8 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
             minuteOfDay: min,
             side: t.side,
             betrag: toNum(t.betrag),
+            ordrqty: t.ordrqty,
+            price: t.price,
             instmnem: t.instmnem ?? "",
             instshtnam: t.instshtnam ?? "",
             etpLabel: t.etpLabel ?? "",
@@ -477,6 +420,8 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
             minuteOfDay: 720,
             side: t.side,
             betrag: toNum(t.betrag),
+            ordrqty: t.ordrqty,
+            price: t.price,
             instmnem: t.instmnem ?? "",
             instshtnam: t.instshtnam ?? "",
             etpLabel: t.etpLabel ?? "",
@@ -568,9 +513,26 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
   return (
     <div className="rounded-2xl border border-neutral-800 bg-neutral-900/50 overflow-hidden mb-8">
       <div className="px-5 py-4 border-b border-neutral-800 flex flex-wrap items-center justify-between gap-4">
-        <h2 className="text-lg font-semibold text-neutral-100 tracking-tight shrink-0">
-          Positions- & Trades-Analyse
-        </h2>
+        <div className="flex items-center gap-3 shrink-0">
+          <h2 className="text-lg font-semibold text-neutral-100 tracking-tight">
+            Positions- & Trades-Analyse
+          </h2>
+          {snapshots.length > 0 && onSelectedSnapshotChange && (
+            <CustomSelectDropdown
+              value={selectedSnapshot?.id ?? ""}
+              onChange={(id) => {
+                const s = snapshots.find((x) => x.id === id);
+                if (s) onSelectedSnapshotChange(s);
+              }}
+              options={snapshots.map((s) => ({
+                value: s.id,
+                label: formatDate(s.snapshot_date) + (s.label ? ` (${s.label})` : ""),
+              }))}
+              placeholder="Datum wählen"
+              minWidth="140px"
+            />
+          )}
+        </div>
         <div className="flex items-center gap-4 flex-wrap flex-1 min-w-0 justify-end">
           {viewMode === "compare" && (
             <div className="flex items-center gap-3 flex-wrap">
@@ -754,7 +716,7 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
               <div className="rounded-xl border border-neutral-800 bg-neutral-900/80 p-4">
                 <p className="text-xs text-neutral-500 uppercase tracking-wider">Gesamt-Positionen</p>
                 <p className="text-xl font-semibold text-neutral-100 tabular-nums mt-0.5">
-                  {positionOverviewData.reduce((acc, p) => acc + 1, 0)}
+                  {totalPositionCountAndValue.count}
                 </p>
               </div>
               <div className="rounded-xl border border-neutral-800 bg-neutral-900/80 p-4">
@@ -764,7 +726,7 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
               <div className="rounded-xl border border-neutral-800 bg-neutral-900/80 p-4">
                 <p className="text-xs text-neutral-500 uppercase tracking-wider">Gesamt-Wert</p>
                 <p className="text-xl font-semibold text-emerald-400 tabular-nums mt-0.5">
-                  {formatAmount(positionOverviewData.reduce((a, p) => a + p.gesamt, 0))}
+                  {formatAmount(totalPositionCountAndValue.totalValue)}
                 </p>
               </div>
               <div className="rounded-xl border border-neutral-800 bg-neutral-900/80 p-4">
@@ -865,7 +827,36 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
               </div>
             </div>
             <div>
-              <h3 className="text-sm text-neutral-400 mb-3">Alle Trades mit Uhrzeit ({filteredIntradayTrades.length})</h3>
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+                <h3 className="text-sm text-neutral-400">
+                  Alle Trades mit Uhrzeit (Gesamt: {filteredIntradayTrades.length})
+                </h3>
+                {filteredIntradayTrades.length > 0 && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-neutral-500">Anzeigen:</span>
+                  <CustomSelectDropdown
+                    value={String(tradesPageSize)}
+                    onChange={(v) => setTradesPageSize(Number(v) as 15 | 50 | 100)}
+                    options={[
+                      { value: "15", label: "15" },
+                      { value: "50", label: "50" },
+                      { value: "100", label: "100" },
+                    ]}
+                    placeholder="15"
+                    minWidth="60px"
+                  />
+                  {tradesVisibleCount < filteredIntradayTrades.length && (
+                    <button
+                      type="button"
+                      onClick={() => setTradesVisibleCount((n) => Math.min(n + tradesPageSize, filteredIntradayTrades.length))}
+                      className="rounded-lg border border-neutral-700 bg-neutral-800/80 px-3 py-1.5 text-xs text-neutral-200 hover:bg-neutral-700/80 cursor-pointer transition-colors"
+                    >
+                      Weiter ({Math.min(tradesPageSize, filteredIntradayTrades.length - tradesVisibleCount)} mehr)
+                    </button>
+                  )}
+                </div>
+                )}
+              </div>
               <div className="overflow-x-auto max-h-80 overflow-y-auto rounded-lg border border-neutral-800">
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-neutral-900 z-10">
@@ -874,6 +865,8 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
                       <th className="px-4 py-2 font-normal w-16">B/S</th>
                       <th className="px-4 py-2 font-normal">Kürzel</th>
                       <th className="px-4 py-2 font-normal">Name</th>
+                      <th className="px-4 py-2 font-normal text-right">Ordermenge</th>
+                      <th className="px-4 py-2 font-normal text-right">Stückpreis</th>
                       <th className="px-4 py-2 font-normal text-right">Betrag</th>
                       <th className="px-4 py-2 font-normal text-center w-20">Crypto</th>
                     </tr>
@@ -881,14 +874,14 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
                   <tbody>
                     {filteredIntradayTrades.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="px-4 py-6 text-center text-neutral-500">
+                        <td colSpan={8} className="px-4 py-6 text-center text-neutral-500">
                           {intradayFilter
                             ? `Keine Trades passen zu „${intradayFilter}“.`
                             : "Keine Trades mit Uhrzeit im Snapshot. Die CSV muss eine TRANDATTIM-Spalte enthalten."}
                         </td>
                       </tr>
                     ) : (
-                      filteredIntradayTrades.map((t, idx) => (
+                      filteredIntradayTrades.slice(0, tradesVisibleCount).map((t, idx) => (
                         <tr key={idx} className="border-b border-neutral-800/50 hover:bg-neutral-800/20">
                           <td className="px-4 py-2 font-mono text-neutral-300 tabular-nums">{t.timeDisplay}</td>
                           <td className="px-4 py-2">
@@ -898,7 +891,9 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
                           </td>
                           <td className="px-4 py-2 font-mono text-neutral-400">{t.instmnem || "—"}</td>
                           <td className="px-4 py-2 text-neutral-300 truncate max-w-[180px]" title={t.instshtnam}>{t.instshtnam || "—"}</td>
-                          <td className="px-4 py-2 text-right tabular-nums text-neutral-200">{formatAmount(t.betrag)}</td>
+                          <td className="px-4 py-2 text-right tabular-nums text-neutral-400">{t.ordrqty != null ? formatOrdrqty(t.ordrqty) : "—"}</td>
+                          <td className="px-4 py-2 text-right tabular-nums text-neutral-400">{t.price != null ? formatDecimalDe(t.price) : "—"}</td>
+                          <td className="px-4 py-2 text-right tabular-nums text-neutral-200">{formatDecimalDe(t.betrag)}</td>
                           <td className="px-4 py-2 text-center">
                             {t.etpLabel ? <span className="text-xs text-amber-400">{t.etpLabel}</span> : "—"}
                           </td>

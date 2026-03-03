@@ -15,7 +15,7 @@ export default function Header() {
 
   return (
     <header className="sticky top-0 z-50 border-b border-neutral-800 bg-neutral-950/90 backdrop-blur-sm">
-      <div className="mx-auto max-w-7xl px-6 h-14 flex items-center justify-between">
+      <div className="mx-auto max-w-screen-2xl px-6 h-14 flex items-center justify-between">
         <Link
           href="/"
           className="text-neutral-100 font-medium tracking-tight hover:text-amber-400 transition-colors"

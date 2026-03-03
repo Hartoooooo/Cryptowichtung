@@ -25,6 +25,8 @@ interface CsvRow {
   instshtnam: string;
   iban: string;
   trandattim?: string;
+  ordrqty?: number;
+  price?: number;
 }
 
 interface MatchedRow {
@@ -92,6 +94,29 @@ function parseBetrag(raw: string): number | null {
   return isNaN(num) ? null : num;
 }
 
+/** Ordermenge/Stückpreis: Punkt = Dezimaltrenner (33.695 → 33,695), Komma = Dezimaltrenner (33,695), bis 4 Dezimalstellen */
+function parseDecimalFlexible(raw: string): number | null {
+  const cleaned = raw.trim().replace(/['"]/g, "").replace(/\s/g, "");
+  if (!cleaned) return null;
+  const hasComma = cleaned.includes(",");
+  const hasDot = cleaned.includes(".");
+  if (hasComma && !hasDot) {
+    const num = parseFloat(cleaned.replace(",", "."));
+    return isNaN(num) ? null : num;
+  }
+  if (hasDot && !hasComma) {
+    const num = parseFloat(cleaned);
+    return isNaN(num) ? null : num;
+  }
+  if (hasComma && hasDot) {
+    const normalized = cleaned.replace(/\./g, "").replace(",", ".");
+    const num = parseFloat(normalized);
+    return isNaN(num) ? null : num;
+  }
+  const num = parseFloat(cleaned);
+  return isNaN(num) ? null : num;
+}
+
 function parseCsvFile(file: File): Promise<CsvRow[]> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -150,6 +175,18 @@ function parseCsvFile(file: File): Promise<CsvRow[]> {
             x === "timestamp" || x === "datetime" || x === "transaktionsdatum" ||
             x === "orderdate" || x === "tradedate" || x === "executiontime";
         });
+        const colOrdrqty = headers.findIndex((h) => {
+          const x = h.toLowerCase().replace(/[^a-z0-9]/g, "");
+          return x === "ordrqty" || h === "ordr_qty" || h === "order quantity" ||
+            x === "menge" || x === "quantity" || x === "qty" || x === "anzahl" ||
+            x === "stückzahl" || x === "stueckzahl";
+        });
+        const colPrice = headers.findIndex((h) => {
+          const x = h.toLowerCase().replace(/[^a-z0-9]/g, "");
+          return x === "price" || h === "prc" || h === "prz" || h === "preis" ||
+            x === "stückpreis" || x === "stueckpreis" || x === "unitprice" ||
+            x === "kurs" || h === "px";
+        });
 
         if (colIsin < 0) {
           reject(new Error("Keine Spalte 'ISINCOD' gefunden. Bitte prüfe die CSV-Spaltenbezeichnungen."));
@@ -171,11 +208,23 @@ function parseCsvFile(file: File): Promise<CsvRow[]> {
           const iban = colIban >= 0 ? (cells[colIban] ?? "").trim() : "";
           if (!isinRaw) continue;
           if (!ISIN_REGEX.test(isinRaw)) continue;
-          const betrag = parseBetrag(betragRaw);
+          const betrag = parseDecimalFlexible(betragRaw);
           if (betrag === null || betrag === 0) continue;
           const side: TradeSide = sideRaw === "S" ? "S" : "B";
           const trandattim = colTrandattim >= 0 ? (cells[colTrandattim] ?? "").trim() : undefined;
-          out.push({ isincod: isinRaw, betrag, side, instmnem, instshtnam, iban, trandattim: trandattim || undefined });
+          const ordrqty = colOrdrqty >= 0 ? parseDecimalFlexible(cells[colOrdrqty] ?? "") ?? undefined : undefined;
+          const price = colPrice >= 0 ? parseDecimalFlexible(cells[colPrice] ?? "") ?? undefined : undefined;
+          out.push({
+            isincod: isinRaw,
+            betrag,
+            side,
+            instmnem,
+            instshtnam,
+            iban,
+            trandattim: trandattim || undefined,
+            ordrqty: ordrqty != null && ordrqty !== 0 ? ordrqty : undefined,
+            price: price != null && price !== 0 ? price : undefined,
+          });
         }
         resolve(out);
       } catch (err) {
@@ -526,6 +575,8 @@ export default function AuswertungPage() {
           instmnem: row.instmnem ?? "",
           instshtnam: row.instshtnam ?? "",
           betrag: row.betrag,
+          ordrqty: row.ordrqty,
+          price: row.price,
           etpLabel,
         };
       });
@@ -575,10 +626,18 @@ export default function AuswertungPage() {
 
   const formatAmount = (n: number) =>
     n.toLocaleString("de-DE", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  /** Ordermenge/Stückpreis: Komma als Dezimaltrenner, bis 4 Nachkommastellen, ,00 wenn ganzzahlig */
+  const formatDecimalDe = (n: number) =>
+    n.toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+  /** Ordermenge: ganzzahlig ohne ,00, sonst Komma mit Nachkommastellen */
+  const formatOrdrqty = (n: number) =>
+    n % 1 === 0
+      ? n.toLocaleString("de-DE", { maximumFractionDigits: 0 })
+      : n.toLocaleString("de-DE", { minimumFractionDigits: 1, maximumFractionDigits: 4 });
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 font-sans antialiased">
-      <div className="mx-auto max-w-7xl px-6 py-12">
+      <div className="mx-auto max-w-screen-2xl px-6 py-12">
         <div className="mb-8">
           <h1 className="text-2xl tracking-tight text-neutral-100 mb-1">
             Portfolio-Auswertung
@@ -943,6 +1002,8 @@ export default function AuswertungPage() {
                                       Kürzel {positionSortBy === "kürzel" && (positionSortDir === "asc" ? "↑" : "↓")}
                                     </th>
                                     <th className="px-5 py-2 font-normal">Name</th>
+                                    <th className="px-5 py-2 font-normal text-right">Ordermenge</th>
+                                    <th className="px-5 py-2 font-normal text-right">Stückpreis</th>
                                     <th
                                       onClick={(e) => { e.stopPropagation(); setPositionSortBy("betrag"); setPositionSortDir((d) => (positionSortBy === "betrag" ? (d === "asc" ? "desc" : "asc") : "desc")); }}
                                       className="px-5 py-2 font-normal text-right cursor-pointer hover:text-neutral-400"
@@ -973,7 +1034,9 @@ export default function AuswertungPage() {
                                         <td className="px-5 py-2 font-mono text-neutral-400 tabular-nums">{extractTimeFromTrandattim(row.trandattim)}</td>
                                         <td className="px-5 py-2 font-mono text-neutral-400">{row.instmnem || "—"}</td>
                                         <td className="px-5 py-2 text-neutral-300 truncate max-w-[160px]" title={row.instshtnam || dbEntry?.name}>{row.instshtnam || dbEntry?.name || "—"}</td>
-                                        <td className="px-5 py-2 text-right tabular-nums text-neutral-200">{formatAmount(row.betrag)}</td>
+                                        <td className="px-5 py-2 text-right tabular-nums text-neutral-400">{row.ordrqty != null ? formatOrdrqty(row.ordrqty) : "—"}</td>
+                                        <td className="px-5 py-2 text-right tabular-nums text-neutral-400">{row.price != null ? formatDecimalDe(row.price) : "—"}</td>
+                                        <td className="px-5 py-2 text-right tabular-nums text-neutral-200">{formatDecimalDe(row.betrag)}</td>
                                         <td className="px-5 py-2 text-center">
                                           {etpLabel ? <span className="text-xs text-amber-400">{etpLabel}</span> : "—"}
                                         </td>

@@ -15,6 +15,8 @@ export interface SnapshotPositionTrade {
   instmnem: string;
   instshtnam: string;
   betrag: number;
+  ordrqty?: number;
+  price?: number;
   etpLabel: string;
 }
 
