@@ -229,7 +229,6 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
   const [intradayBrushRange, setIntradayBrushRange] = useState<{ startIndex: number; endIndex: number } | null>(null);
   const brushDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const BRUSH_DEBOUNCE_MS = 350;
-
   const ROHSTOFF_LABELS: Record<string, string> = { XAU: "Gold", XAG: "Silber", GOLD: "Gold", SILVER: "Silber" };
   const ROHSTOFF_IDS = ["XAU", "XAG", "GOLD", "SILVER"];
   const [tradesPageSize, setTradesPageSize] = useState<15 | 50 | 100>(15);
@@ -399,6 +398,18 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
       }
     }
     return total;
+  }, [snapshots]);
+
+  const totalBuyAndSellAcrossSnapshots = useMemo(() => {
+    let totalBuy = 0;
+    let totalSell = 0;
+    for (const s of snapshots) {
+      for (const p of s.positions ?? []) {
+        totalBuy += toNum(p.buyAmount);
+        totalSell += toNum(p.sellAmount);
+      }
+    }
+    return { totalBuy, totalSell };
   }, [snapshots]);
 
   const formatter = (value: number | undefined) => (value != null && Math.abs(value) >= 1000 ? formatAmount(value) : String(value ?? ""));
@@ -772,7 +783,7 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
               </div>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
               <div className="rounded-xl border border-neutral-800 bg-neutral-900/80 p-4">
                 <p className="text-xs text-neutral-500 uppercase tracking-wider">Gesamt-Positionen</p>
                 <p className="text-xl font-semibold text-neutral-100 tabular-nums mt-0.5">
@@ -782,6 +793,18 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
               <div className="rounded-xl border border-neutral-800 bg-neutral-900/80 p-4">
                 <p className="text-xs text-neutral-500 uppercase tracking-wider">Trades gesamt</p>
                 <p className="text-xl font-semibold text-amber-400 tabular-nums mt-0.5">{totalTradesAcrossSnapshots}</p>
+              </div>
+              <div className="rounded-xl border border-neutral-800 bg-neutral-900/80 p-4">
+                <p className="text-xs text-neutral-500 uppercase tracking-wider">Gesamt Buy</p>
+                <p className="text-xl font-semibold text-emerald-400 tabular-nums mt-0.5">
+                  {formatAmount(totalBuyAndSellAcrossSnapshots.totalBuy)}
+                </p>
+              </div>
+              <div className="rounded-xl border border-neutral-800 bg-neutral-900/80 p-4">
+                <p className="text-xs text-neutral-500 uppercase tracking-wider">Gesamt Sell</p>
+                <p className="text-xl font-semibold text-red-400 tabular-nums mt-0.5">
+                  {formatAmount(totalBuyAndSellAcrossSnapshots.totalSell)}
+                </p>
               </div>
               <div className="rounded-xl border border-neutral-800 bg-neutral-900/80 p-4">
                 <p className="text-xs text-neutral-500 uppercase tracking-wider">Gesamt-Wert</p>

@@ -94,6 +94,8 @@ export default function VerlaufPage() {
   const [selectedPosition, setSelectedPosition] = useState<string | null>(null);
   const [positionsPageSize, setPositionsPageSize] = useState<15 | 50 | 100>(15);
   const [positionsVisibleCount, setPositionsVisibleCount] = useState(15);
+  const [tablePositionSortBy, setTablePositionSortBy] = useState<"gesamt" | "buyAmount" | "sellAmount">("gesamt");
+  const [tablePositionSortOrder, setTablePositionSortOrder] = useState<"asc" | "desc">("desc");
 
   useEffect(() => {
     setPositionSearch("");
@@ -129,6 +131,13 @@ export default function VerlaufPage() {
         (p.nameDisplay ?? "").toLowerCase().includes(q)
     );
   }, [selectedSnapshot?.positions, positionSearch]);
+
+  // Sortierte Positionen für Tabelle
+  const sortedFilteredPositions = useMemo(() => {
+    const dir = tablePositionSortOrder === "asc" ? 1 : -1;
+    const key = tablePositionSortBy;
+    return [...filteredPositions].sort((a, b) => dir * ((b[key] ?? 0) - (a[key] ?? 0)));
+  }, [filteredPositions, tablePositionSortBy, tablePositionSortOrder]);
 
   // Alle einzigartigen Coins über alle Snapshots
   const allCoins = useMemo(() => {
@@ -173,11 +182,6 @@ export default function VerlaufPage() {
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 font-sans antialiased">
       <div className="mx-auto max-w-screen-2xl px-6 py-12">
-        <div className="mb-8">
-          <h1 className="text-2xl tracking-tight text-neutral-100 mb-1">Verlauf</h1>
-          <p className="text-neutral-400 text-sm">Tagesweise gespeicherte Portfolio-Auswertungen</p>
-        </div>
-
         {error && (
           <div className="mb-6 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-red-300 text-sm">
             {error}
@@ -274,7 +278,7 @@ export default function VerlaufPage() {
                     <div className="border-t border-neutral-800">
                       <div className="px-5 py-3 border-b border-neutral-800 flex flex-wrap items-center justify-between gap-3">
                         <span className="text-sm text-neutral-400">Größte Positionen (Gesamt: {filteredPositions.length})</span>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <input
                             type="text"
                             value={positionSearch}
@@ -313,14 +317,30 @@ export default function VerlaufPage() {
                               <th className="px-5 py-3 font-normal">Kürzel</th>
                               <th className="px-5 py-3 font-normal">Name</th>
                               <th className="px-5 py-3 font-normal text-right w-16">Trades</th>
-                              <th className="px-5 py-3 font-normal text-right">Buy</th>
-                              <th className="px-5 py-3 font-normal text-right">Sell</th>
+                              <th
+                                className="px-5 py-3 font-normal text-right cursor-pointer hover:text-neutral-300 hover:bg-neutral-800/50 transition-colors select-none"
+                                onClick={() => {
+                                  setTablePositionSortBy("buyAmount");
+                                  setTablePositionSortOrder((prev) => (tablePositionSortBy === "buyAmount" ? (prev === "desc" ? "asc" : "desc") : "desc"));
+                                }}
+                              >
+                                Buy{tablePositionSortBy === "buyAmount" && (tablePositionSortOrder === "desc" ? " ↓" : " ↑")}
+                              </th>
+                              <th
+                                className="px-5 py-3 font-normal text-right cursor-pointer hover:text-neutral-300 hover:bg-neutral-800/50 transition-colors select-none"
+                                onClick={() => {
+                                  setTablePositionSortBy("sellAmount");
+                                  setTablePositionSortOrder((prev) => (tablePositionSortBy === "sellAmount" ? (prev === "desc" ? "asc" : "desc") : "desc"));
+                                }}
+                              >
+                                Sell{tablePositionSortBy === "sellAmount" && (tablePositionSortOrder === "desc" ? " ↓" : " ↑")}
+                              </th>
                               <th className="px-5 py-3 font-normal text-right">Gesamt</th>
                               <th className="px-5 py-3 font-normal text-center w-24">Crypto</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {filteredPositions.slice(0, positionsVisibleCount).map((pos) => {
+                            {sortedFilteredPositions.slice(0, positionsVisibleCount).map((pos) => {
                               const trades = pos.trades ?? [];
                               const isExpanded = selectedPosition === pos.iban;
                               return (
