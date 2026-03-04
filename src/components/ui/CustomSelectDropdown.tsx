@@ -8,6 +8,7 @@ interface CustomSelectDropdownProps {
   options: { value: string; label: string }[];
   placeholder: string;
   minWidth?: string;
+  buttonClassName?: string;
 }
 
 export default function CustomSelectDropdown({
@@ -16,6 +17,7 @@ export default function CustomSelectDropdown({
   options,
   placeholder,
   minWidth = "88px",
+  buttonClassName,
 }: CustomSelectDropdownProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -32,7 +34,7 @@ export default function CustomSelectDropdown({
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1.5 rounded-lg border border-neutral-700 bg-neutral-900/80 px-2.5 py-1.5 text-xs text-neutral-200 transition-all hover:border-neutral-600 hover:bg-neutral-800/80 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500/30 cursor-pointer shrink-0"
+        className={`flex items-center h-9 rounded-lg border border-neutral-700 bg-neutral-900/80 px-2.5 text-xs text-neutral-200 transition-all hover:border-neutral-600 hover:bg-neutral-800/80 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500/30 cursor-pointer shrink-0 ${buttonClassName ?? ""}`}
         style={{ minWidth }}
       >
         <span className="flex-1 text-left truncate">{current?.label ?? placeholder}</span>
