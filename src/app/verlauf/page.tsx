@@ -36,12 +36,48 @@ interface SnapshotPosition {
   trades?: SnapshotPositionTrade[];
 }
 
+interface SnapshotCategorizedTrade {
+  side: "B" | "S";
+  trandattim?: string;
+  instmnem: string;
+  instshtnam: string;
+  betrag: number;
+  ordrqty?: number;
+  price?: number;
+}
+
+interface SnapshotCategorizedPosition {
+  positionKey: string;
+  tickerDisplay: string;
+  nameDisplay: string;
+  direction: string;
+  hebelHoehe: string;
+  tradesCount: number;
+  buyAmount: number;
+  sellAmount: number;
+  totalAmount: number;
+  trades: SnapshotCategorizedTrade[];
+}
+
+interface SnapshotCategorizedAsset {
+  name: string;
+  direction: string | null;
+  hebelHoehe: string;
+  positionsCount: number;
+  tradesCount: number;
+  buyAmount: number;
+  sellAmount: number;
+  totalAmount: number;
+  positions: SnapshotCategorizedPosition[];
+}
+
 interface Snapshot {
   id: string;
   snapshot_date: string;
   label: string | null;
   coins: SnapshotCoin[];
   positions?: SnapshotPosition[] | null;
+  categorized_assets?: SnapshotCategorizedAsset[] | null;
   created_at: string;
 }
 
@@ -96,10 +132,14 @@ export default function VerlaufPage() {
   const [positionsVisibleCount, setPositionsVisibleCount] = useState(15);
   const [tablePositionSortBy, setTablePositionSortBy] = useState<"gesamt" | "buyAmount" | "sellAmount">("gesamt");
   const [tablePositionSortOrder, setTablePositionSortOrder] = useState<"asc" | "desc">("desc");
+  const [expandedCategorized, setExpandedCategorized] = useState<Set<string>>(new Set());
+  const [expandedCategorizedPosition, setExpandedCategorizedPosition] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     setPositionSearch("");
     setSelectedPosition(null);
+    setExpandedCategorized(new Set());
+    setExpandedCategorizedPosition(new Set());
   }, [selectedSnapshot?.id]);
 
   useEffect(() => {
@@ -424,6 +464,181 @@ export default function VerlaufPage() {
                                     <tr>
                                       <td colSpan={8} className="px-5 py-3 text-sm text-neutral-500 bg-neutral-900/80 border-b border-neutral-800/50">
                                         Keine Detail-Trades für diese Position gespeichert (Snapshot vor Update erstellt).
+                                      </td>
+                                    </tr>
+                                  )}
+                                </Fragment>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Kategorisierte Assets (exakt wie Auswertungs-Seite) */}
+                  {selectedSnapshot.categorized_assets && selectedSnapshot.categorized_assets.length > 0 && (
+                    <div className="border-t border-neutral-800">
+                      <div className="px-5 py-3 border-b border-neutral-800 flex flex-wrap items-center justify-between gap-3">
+                        <span className="text-sm text-neutral-400">Kategorisierte Assets ({selectedSnapshot.categorized_assets.length})</span>
+                        <span className="text-sm text-neutral-500 flex items-center gap-4">
+                          <span>Buy: <span className="text-emerald-400 tabular-nums">{formatAmount(selectedSnapshot.categorized_assets.reduce((s, a) => s + a.buyAmount, 0))}</span></span>
+                          <span>Sell: <span className="text-red-400 tabular-nums">{formatAmount(selectedSnapshot.categorized_assets.reduce((s, a) => s + a.sellAmount, 0))}</span></span>
+                          <span>Gesamt: <span className="text-amber-400 tabular-nums">{formatAmount(selectedSnapshot.categorized_assets.reduce((s, a) => s + a.totalAmount, 0))}</span></span>
+                        </span>
+                      </div>
+                      <div className="overflow-x-auto max-h-[42rem] overflow-y-auto">
+                        <table className="w-full text-sm">
+                          <thead className="sticky top-0 bg-neutral-900 z-10">
+                            <tr className="text-left text-neutral-500 border-b border-neutral-800">
+                              <th className="px-5 py-3 font-normal">Rohstoff/Art</th>
+                              <th className="px-5 py-3 font-normal w-20">Direction</th>
+                              <th className="px-5 py-3 font-normal w-16">Hebel</th>
+                              <th className="px-5 py-3 font-normal text-right w-16">Pos.</th>
+                              <th className="px-5 py-3 font-normal text-right w-20">Anzahl Trades</th>
+                              <th className="px-5 py-3 font-normal text-right">Buy</th>
+                              <th className="px-5 py-3 font-normal text-right">Sell</th>
+                              <th className="px-5 py-3 font-normal text-right">Gesamt</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {selectedSnapshot.categorized_assets.map((alloc) => {
+                              const isExpanded = expandedCategorized.has(alloc.name);
+                              return (
+                                <Fragment key={alloc.name}>
+                                  <tr
+                                    onClick={() => setExpandedCategorized((prev) => {
+                                      const next = new Set(prev);
+                                      if (next.has(alloc.name)) {
+                                        next.delete(alloc.name);
+                                        setExpandedCategorizedPosition((p) => {
+                                          const n = new Set(p);
+                                          for (const k of n) if (k.startsWith(alloc.name + "|")) n.delete(k);
+                                          return n;
+                                        });
+                                      } else next.add(alloc.name);
+                                      return next;
+                                    })}
+                                    className={`border-b border-neutral-800/50 hover:bg-neutral-800/20 cursor-pointer transition-colors ${isExpanded ? "bg-amber-500/10" : ""}`}
+                                  >
+                                    <td className="px-5 py-2 text-neutral-200 font-medium">{alloc.name}</td>
+                                    <td className="px-5 py-2 text-neutral-400">{alloc.direction || "—"}</td>
+                                    <td className="px-5 py-2 text-neutral-400 whitespace-nowrap" title={alloc.hebelHoehe}>{alloc.hebelHoehe}</td>
+                                    <td className="px-5 py-2 text-right tabular-nums text-neutral-400">{alloc.positionsCount}</td>
+                                    <td className="px-5 py-2 text-right tabular-nums text-neutral-400">{alloc.tradesCount}</td>
+                                    <td className="px-5 py-2 text-right tabular-nums text-emerald-400">{alloc.buyAmount > 0 ? formatAmount(alloc.buyAmount) : "—"}</td>
+                                    <td className="px-5 py-2 text-right tabular-nums text-red-400">{alloc.sellAmount > 0 ? formatAmount(alloc.sellAmount) : "—"}</td>
+                                    <td className="px-5 py-2 text-right tabular-nums text-amber-400">{formatAmount(alloc.totalAmount)}</td>
+                                  </tr>
+                                  {isExpanded && (
+                                    <tr>
+                                      <td colSpan={8} className="p-0 align-top bg-neutral-900/80 border-b border-neutral-800/50">
+                                        <div className="overflow-x-auto">
+                                          <table className="w-full text-sm">
+                                            <thead className="bg-neutral-900 sticky top-0 z-10">
+                                              <tr className="text-left text-neutral-500 border-b border-neutral-800">
+                                                <th className="px-5 py-3 font-normal">ISIN</th>
+                                                <th className="px-5 py-3 font-normal">Kürzel</th>
+                                                <th className="px-5 py-3 font-normal">Name</th>
+                                                <th className="px-5 py-3 font-normal w-20">Direction</th>
+                                                <th className="px-5 py-3 font-normal w-16">Hebel</th>
+                                                <th className="px-5 py-3 font-normal text-right w-16">Trades</th>
+                                                <th className="px-5 py-3 font-normal text-right">Buy</th>
+                                                <th className="px-5 py-3 font-normal text-right">Sell</th>
+                                                <th className="px-5 py-3 font-normal text-right">Gesamt</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody>
+                                              {alloc.positions.map((pos) => {
+                                                const posKey = `${alloc.name}|${pos.positionKey}`;
+                                                const isPosExpanded = expandedCategorizedPosition.has(posKey);
+                                                return (
+                                                  <Fragment key={pos.positionKey}>
+                                                    <tr
+                                                      onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setExpandedCategorizedPosition((prev) => {
+                                                          const next = new Set(prev);
+                                                          if (next.has(posKey)) next.delete(posKey);
+                                                          else next.add(posKey);
+                                                          return next;
+                                                        });
+                                                      }}
+                                                      className={"border-b border-neutral-800/50 hover:bg-neutral-800/20 cursor-pointer transition-colors" + (isPosExpanded ? " bg-amber-500/10" : "")}
+                                                    >
+                                                      <td className="px-5 py-2 font-mono text-neutral-200 truncate max-w-[200px]">{pos.positionKey}</td>
+                                                      <td className="px-5 py-2 font-mono text-neutral-400 text-sm">{pos.tickerDisplay || "—"}</td>
+                                                      <td className="px-5 py-2 text-neutral-300 truncate max-w-[180px]" title={pos.nameDisplay}>{pos.nameDisplay || "—"}</td>
+                                                      <td className="px-5 py-2 text-neutral-400">{pos.direction || "—"}</td>
+                                                      <td className="px-5 py-2 text-neutral-400 whitespace-nowrap" title={pos.hebelHoehe}>{pos.hebelHoehe}</td>
+                                                      <td className="px-5 py-2 text-right tabular-nums text-neutral-400">{pos.tradesCount}</td>
+                                                      <td className="px-5 py-2 text-right tabular-nums text-emerald-400">{pos.buyAmount > 0 ? formatAmount(pos.buyAmount) : "—"}</td>
+                                                      <td className="px-5 py-2 text-right tabular-nums text-red-400">{pos.sellAmount > 0 ? formatAmount(pos.sellAmount) : "—"}</td>
+                                                      <td className="px-5 py-2 text-right tabular-nums text-amber-400">{formatAmount(pos.totalAmount)}</td>
+                                                    </tr>
+                                                    {isPosExpanded && (
+                                                      <tr>
+                                                        <td colSpan={9} className="p-0 align-top bg-neutral-900/80 border-b border-neutral-800/50">
+                                                          <div className="px-5 py-3 flex justify-between items-center flex-wrap gap-2 border-b border-neutral-800/50">
+                                                            <span className="text-sm text-neutral-400">
+                                                              {pos.tradesCount} Trades für {pos.positionKey}
+                                                            </span>
+                                                            <button
+                                                              type="button"
+                                                              onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                setExpandedCategorizedPosition((p) => {
+                                                                  const n = new Set(p);
+                                                                  n.delete(posKey);
+                                                                  return n;
+                                                                });
+                                                              }}
+                                                              className="text-xs text-neutral-500 hover:text-neutral-300"
+                                                            >
+                                                              Schließen
+                                                            </button>
+                                                          </div>
+                                                          <div className="overflow-x-auto max-h-64 overflow-y-auto">
+                                                            <table className="w-full text-sm">
+                                                              <thead className="sticky top-0 bg-neutral-900 z-10">
+                                                                <tr className="text-left text-neutral-500 border-b border-neutral-800">
+                                                                  <th className="px-5 py-2 font-normal">B/S</th>
+                                                                  <th className="px-5 py-2 font-normal w-20">Uhrzeit</th>
+                                                                  <th className="px-5 py-2 font-normal">Kürzel</th>
+                                                                  <th className="px-5 py-2 font-normal">Name</th>
+                                                                  <th className="px-5 py-2 font-normal text-right">Ordermenge</th>
+                                                                  <th className="px-5 py-2 font-normal text-right">Stückpreis</th>
+                                                                  <th className="px-5 py-2 font-normal text-right">Betrag</th>
+                                                                </tr>
+                                                              </thead>
+                                                              <tbody>
+                                                                {pos.trades.map((t, idx) => (
+                                                                  <tr key={idx} className="border-b border-neutral-800/50 hover:bg-neutral-800/20">
+                                                                    <td className="px-5 py-2">
+                                                                      <span className={`inline-block px-2 py-0.5 rounded text-xs ${t.side === "B" ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"}`}>
+                                                                        {t.side === "B" ? "Buy" : "Sell"}
+                                                                      </span>
+                                                                    </td>
+                                                                    <td className="px-5 py-2 font-mono text-neutral-400 tabular-nums">{extractTimeFromTrandattim(t.trandattim)}</td>
+                                                                    <td className="px-5 py-2 font-mono text-neutral-400">{t.instmnem || "—"}</td>
+                                                                    <td className="px-5 py-2 text-neutral-300 truncate max-w-[160px]" title={t.instshtnam}>{t.instshtnam || "—"}</td>
+                                                                    <td className="px-5 py-2 text-right tabular-nums text-neutral-400">{t.ordrqty != null ? formatOrdrqty(t.ordrqty) : "—"}</td>
+                                                                    <td className="px-5 py-2 text-right tabular-nums text-neutral-400">{t.price != null ? formatDecimalDe(t.price) : "—"}</td>
+                                                                    <td className="px-5 py-2 text-right tabular-nums text-neutral-200">{formatDecimalDe(t.betrag)}</td>
+                                                                  </tr>
+                                                                ))}
+                                                              </tbody>
+                                                            </table>
+                                                          </div>
+                                                        </td>
+                                                      </tr>
+                                                    )}
+                                                  </Fragment>
+                                                );
+                                              })}
+                                            </tbody>
+                                          </table>
+                                        </div>
                                       </td>
                                     </tr>
                                   )}

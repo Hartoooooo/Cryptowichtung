@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useCallback, useEffect, useMemo, Fragment } from "react";
-import MusteranalyseSection from "@/components/musteranalyse/MusteranalyseSection";
 interface Constituent {
   name: string;
   weight: number;
@@ -51,6 +50,35 @@ interface CryptoAllocation {
     weight: number;
     amount: number;
     side: TradeSide;
+  }[];
+}
+
+/** Eintrag aus categorized_assets (für Trades ohne weight_result-Treffer) */
+interface CategorizedAssetEntry {
+  id: string;
+  isin: string;
+  rohstoff_art: string | null;
+  direction: string | null;
+  hebel_hoehe: string | null;
+}
+
+interface CategorizedRow {
+  row: CsvRow;
+  dbEntry: CategorizedAssetEntry;
+}
+
+/** Allokation aus categorized_assets (z.B. Gold, Silber) */
+interface CategorizedAssetAllocation {
+  name: string;
+  totalAmount: number;
+  buyAmount: number;
+  sellAmount: number;
+  direction: string | null;
+  hebelHoeheSet: Set<string>;
+  contributions: {
+    row: CsvRow;
+    positionKey: string;
+    dbEntry: CategorizedAssetEntry;
   }[];
 }
 
@@ -366,6 +394,40 @@ function buildAllocations(matched: MatchedRow[]): CryptoAllocation[] {
   return Array.from(map.values()).sort((a, b) => Math.abs(b.totalAmount) - Math.abs(a.totalAmount));
 }
 
+function buildCategorizedAllocations(categorizedRows: CategorizedRow[]): CategorizedAssetAllocation[] {
+  const map = new Map<string, CategorizedAssetAllocation>();
+
+  for (const { row, dbEntry } of categorizedRows) {
+    const rohstoffArt = (dbEntry.rohstoff_art ?? "").trim() || "Sonstige";
+    const direction = (dbEntry.direction ?? "").trim().toLowerCase();
+    const name = direction ? `${rohstoffArt} ${direction.charAt(0).toUpperCase() + direction.slice(1)}` : rohstoffArt;
+    const positionKey = (row.iban ?? "").trim() || row.isincod;
+
+    if (!map.has(name)) {
+      map.set(name, {
+        name,
+        totalAmount: 0,
+        buyAmount: 0,
+        sellAmount: 0,
+        direction: dbEntry.direction,
+        hebelHoeheSet: new Set<string>(),
+        contributions: [],
+      });
+    }
+    const alloc = map.get(name)!;
+    if (row.side === "B") {
+      alloc.buyAmount += row.betrag;
+    } else {
+      alloc.sellAmount += row.betrag;
+    }
+    alloc.totalAmount = alloc.buyAmount - alloc.sellAmount;
+    if (dbEntry.hebel_hoehe?.trim()) alloc.hebelHoeheSet.add(dbEntry.hebel_hoehe.trim());
+    alloc.contributions.push({ row, positionKey, dbEntry });
+  }
+
+  return Array.from(map.values()).sort((a, b) => Math.abs(b.totalAmount) - Math.abs(a.totalAmount));
+}
+
 export default function AuswertungPage() {
   const [dbEntries, setDbEntries] = useState<WeightResult[]>([]);
   const [dbLoading, setDbLoading] = useState(true);
@@ -386,39 +448,58 @@ export default function AuswertungPage() {
   const [selectedPosition, setSelectedPosition] = useState<string | null>(null);
   const [positionSortBy, setPositionSortBy] = useState<"betrag" | "side" | "kürzel" | "uhrzeit">("betrag");
   const [positionSortDir, setPositionSortDir] = useState<"asc" | "desc">("desc");
+  const [categorizedAssets, setCategorizedAssets] = useState<CategorizedAssetEntry[]>([]);
+  const [categorizedRows, setCategorizedRows] = useState<CategorizedRow[]>([]);
+  const [categorizedAllocations, setCategorizedAllocations] = useState<CategorizedAssetAllocation[]>([]);
+  const [expandedCategorized, setExpandedCategorized] = useState<Set<string>>(new Set());
+  const [expandedCategorizedPosition, setExpandedCategorizedPosition] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    fetch("/api/weight-results")
-      .then((res) => res.json())
-      .then((result) => {
-        if (result.error) {
-          setDbError(result.error);
-          return;
-        }
-        setDbEntries(Array.isArray(result) ? result : []);
-      })
-      .catch(() => setDbError("Fehler beim Laden der Datenbank"))
+    Promise.all([
+      fetch("/api/weight-results").then((res) => res.json()),
+      fetch("/api/categorized-assets").then((res) => res.json()),
+    ]).then(([weightResult, categorizedResult]) => {
+      if (weightResult.error) {
+        setDbError(weightResult.error);
+      } else {
+        setDbEntries(Array.isArray(weightResult) ? weightResult : []);
+      }
+      if (!categorizedResult.error) {
+        setCategorizedAssets(Array.isArray(categorizedResult) ? categorizedResult : []);
+      }
+    }).catch(() => setDbError("Fehler beim Laden der Datenbank"))
       .finally(() => setDbLoading(false));
   }, []);
 
   const processCsvRows = useCallback(
     (rows: CsvRow[]) => {
       const matchedRows: MatchedRow[] = [];
+      const categorizedRowsList: CategorizedRow[] = [];
       const missing: string[] = [];
 
       for (const row of rows) {
-        const dbEntry = dbEntries.find(
+        const weightEntry = dbEntries.find(
           (d) => d.isin.toUpperCase() === row.isincod
         );
-        if (dbEntry) {
-          matchedRows.push({ ...row, dbEntry });
+        if (weightEntry) {
+          matchedRows.push({ ...row, dbEntry: weightEntry });
+          continue;
+        }
+        const catEntry = categorizedAssets.find(
+          (c) => c.isin.toUpperCase() === row.isincod
+        );
+        if (catEntry) {
+          categorizedRowsList.push({ row, dbEntry: catEntry });
         } else {
           missing.push(row.isincod);
         }
       }
 
       const built = buildAllocations(matchedRows);
+      const builtCategorized = buildCategorizedAllocations(categorizedRowsList);
       setMatched(matchedRows);
+      setCategorizedRows(categorizedRowsList);
+      setCategorizedAllocations(builtCategorized);
       setNotFound(missing);
       setAllocations(built);
 
@@ -439,8 +520,14 @@ export default function AuswertungPage() {
           .finally(() => setPricesLoading(false));
       }
     },
-    [dbEntries]
+    [dbEntries, categorizedAssets]
   );
+
+  useEffect(() => {
+    if (csvRows.length > 0 && !dbLoading) {
+      processCsvRows(csvRows);
+    }
+  }, [dbEntries, categorizedAssets, dbLoading, processCsvRows, csvRows]);
 
   const handleFile = useCallback(
     async (file: File) => {
@@ -451,6 +538,8 @@ export default function AuswertungPage() {
       setParseError(null);
       setCsvRows([]);
       setMatched([]);
+      setCategorizedRows([]);
+      setCategorizedAllocations([]);
       setNotFound([]);
       setAllocations([]);
       try {
@@ -544,7 +633,7 @@ export default function AuswertungPage() {
   }, [selectedPosition, csvRows, positionSortBy, positionSortDir]);
 
   const handleSaveSnapshot = useCallback(async () => {
-    if (allocations.length === 0) return;
+    if (allocations.length === 0 && categorizedAllocations.length === 0) return;
     setSaveLoading(true);
     setSaveStatus("idle");
     const totalAbs = allocations.reduce((s, a) => s + Math.abs(a.totalAmount), 0);
@@ -592,6 +681,60 @@ export default function AuswertungPage() {
         trades,
       };
     });
+
+    const categorizedAssetsPayload = categorizedAllocations.map((alloc) => {
+      const positionsByKey = new Map<string, { positionKey: string; trades: { row: CsvRow; dbEntry: CategorizedAssetEntry }[]; buyAmount: number; sellAmount: number; hebelSet: Set<string>; directionSet: Set<string> }>();
+      for (const c of alloc.contributions) {
+        if (!positionsByKey.has(c.positionKey)) {
+          positionsByKey.set(c.positionKey, { positionKey: c.positionKey, trades: [], buyAmount: 0, sellAmount: 0, hebelSet: new Set(), directionSet: new Set() });
+        }
+        const pos = positionsByKey.get(c.positionKey)!;
+        pos.trades.push({ row: c.row, dbEntry: c.dbEntry });
+        if (c.row.side === "B") pos.buyAmount += c.row.betrag;
+        else pos.sellAmount += c.row.betrag;
+        if (c.dbEntry.hebel_hoehe?.trim()) pos.hebelSet.add(c.dbEntry.hebel_hoehe.trim());
+        if (c.dbEntry.direction?.trim()) pos.directionSet.add(c.dbEntry.direction.trim());
+      }
+      const positions = Array.from(positionsByKey.values()).sort((a, b) => Math.abs((b.buyAmount - b.sellAmount)) - Math.abs((a.buyAmount - a.sellAmount)));
+      return {
+        name: alloc.name,
+        direction: alloc.direction,
+        hebelHoehe: alloc.hebelHoeheSet.size > 0 ? Array.from(alloc.hebelHoeheSet).join(", ") : "—",
+        positionsCount: positions.length,
+        tradesCount: alloc.contributions.length,
+        buyAmount: alloc.buyAmount,
+        sellAmount: alloc.sellAmount,
+        totalAmount: alloc.totalAmount,
+        positions: positions.map((pos) => {
+          const posTotal = pos.buyAmount - pos.sellAmount;
+          const tickerDisplay = [...new Set(pos.trades.map((t) => t.row.instmnem).filter(Boolean))].join(", ");
+          const nameDisplay = [...new Set(pos.trades.map((t) => t.row.instshtnam).filter(Boolean))].join(", ");
+          const hebelHoehe = pos.hebelSet.size > 0 ? Array.from(pos.hebelSet).join(", ") : "—";
+          const direction = pos.directionSet.size > 0 ? Array.from(pos.directionSet).join(", ") : "—";
+          return {
+            positionKey: pos.positionKey,
+            tickerDisplay,
+            nameDisplay,
+            direction,
+            hebelHoehe,
+            tradesCount: pos.trades.length,
+            buyAmount: pos.buyAmount,
+            sellAmount: pos.sellAmount,
+            totalAmount: posTotal,
+            trades: pos.trades.map(({ row }) => ({
+              side: row.side,
+              trandattim: row.trandattim,
+              instmnem: row.instmnem ?? "",
+              instshtnam: row.instshtnam ?? "",
+              betrag: row.betrag,
+              ordrqty: row.ordrqty,
+              price: row.price,
+            })),
+          };
+        }),
+      };
+    });
+
     try {
       const res = await fetch("/api/snapshots", {
         method: "POST",
@@ -600,6 +743,7 @@ export default function AuswertungPage() {
           snapshot_date: new Date().toISOString().slice(0, 10),
           coins,
           positions,
+          categorized_assets: categorizedAssetsPayload.length > 0 ? categorizedAssetsPayload : undefined,
         }),
       });
       setSaveStatus(res.ok ? "ok" : "error");
@@ -609,7 +753,7 @@ export default function AuswertungPage() {
       setSaveLoading(false);
       setTimeout(() => setSaveStatus("idle"), 3000);
     }
-  }, [allocations, aggregatedByIban, csvRows, dbEntries]);
+  }, [allocations, aggregatedByIban, csvRows, dbEntries, categorizedAllocations]);
 
   const totalAllocated = allocations.reduce((s, a) => s + Math.abs(a.totalAmount), 0);
 
@@ -694,7 +838,7 @@ export default function AuswertungPage() {
           </label>
           {csvRows.length > 0 && (
             <p className="mt-4 text-amber-400 text-sm">
-              {csvRows.length} gültige Zeile(n) geladen · {matched.length} in Datenbank gefunden
+              {csvRows.length} gültige Zeile(n) geladen · {matched.length} weight_result · {categorizedRows.length} categorized_assets
             </p>
           )}
         </div>
@@ -903,6 +1047,214 @@ export default function AuswertungPage() {
           </div>
         )}
 
+        {/* Kategorisierte Assets (Trades ohne weight_result, abgeglichen mit categorized_assets) – Design wie Größte Positionen */}
+        {categorizedAllocations.length > 0 && (
+          <div className="mb-8 rounded-2xl border border-neutral-800 bg-neutral-900/50 overflow-hidden">
+            <div className="px-5 py-3 border-b border-neutral-800 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <span className="text-sm text-neutral-400">Kategorisierte Assets ({categorizedAllocations.length})</span>
+                {cryptoAllocations.length === 0 && rohstoffAllocations.length === 0 ? (
+                  <>
+                    <button
+                      onClick={handleSaveSnapshot}
+                      disabled={saveLoading}
+                      className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs text-neutral-950 font-medium hover:bg-amber-400 disabled:opacity-50 transition-colors"
+                    >
+                      {saveLoading ? "Speichern…" : "Als Verlauf speichern"}
+                    </button>
+                    {saveStatus === "ok" && <span className="text-xs text-emerald-400">Gespeichert</span>}
+                    {saveStatus === "error" && <span className="text-xs text-red-400">Fehler beim Speichern</span>}
+                  </>
+                ) : null}
+              </div>
+              <span className="text-sm text-neutral-500 flex items-center gap-4">
+                <span>Buy: <span className="text-emerald-400 tabular-nums">{formatAmount(categorizedAllocations.reduce((s, a) => s + a.buyAmount, 0))}</span></span>
+                <span>Sell: <span className="text-red-400 tabular-nums">{formatAmount(categorizedAllocations.reduce((s, a) => s + a.sellAmount, 0))}</span></span>
+                <span>Gesamt: <span className="text-amber-400 tabular-nums">{formatAmount(categorizedAllocations.reduce((s, a) => s + a.totalAmount, 0))}</span></span>
+              </span>
+            </div>
+            <div className="overflow-x-auto max-h-[42rem] overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-neutral-900 z-10">
+                  <tr className="text-left text-neutral-500 border-b border-neutral-800">
+                    <th className="px-5 py-3 font-normal">Rohstoff/Art</th>
+                    <th className="px-5 py-3 font-normal w-20">Direction</th>
+                    <th className="px-5 py-3 font-normal w-16">Hebel</th>
+                    <th className="px-5 py-3 font-normal text-right w-16">Pos.</th>
+                    <th className="px-5 py-3 font-normal text-right w-20">Trades</th>
+                    <th className="px-5 py-3 font-normal text-right">Buy</th>
+                    <th className="px-5 py-3 font-normal text-right">Sell</th>
+                    <th className="px-5 py-3 font-normal text-right">Gesamt</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {categorizedAllocations.map((alloc) => {
+                    const isExpanded = expandedCategorized.has(alloc.name);
+                    const hebelDisplay = alloc.hebelHoeheSet.size === 0 ? "—" : Array.from(alloc.hebelHoeheSet).join(", ");
+                    const positionsByKey = new Map<string, { positionKey: string; trades: { row: CsvRow; dbEntry: CategorizedAssetEntry }[]; buyAmount: number; sellAmount: number; hebelSet: Set<string>; directionSet: Set<string> }>();
+                    for (const c of alloc.contributions) {
+                      if (!positionsByKey.has(c.positionKey)) {
+                        positionsByKey.set(c.positionKey, { positionKey: c.positionKey, trades: [], buyAmount: 0, sellAmount: 0, hebelSet: new Set(), directionSet: new Set() });
+                      }
+                      const pos = positionsByKey.get(c.positionKey)!;
+                      pos.trades.push({ row: c.row, dbEntry: c.dbEntry });
+                      if (c.row.side === "B") pos.buyAmount += c.row.betrag;
+                      else pos.sellAmount += c.row.betrag;
+                      if (c.dbEntry.hebel_hoehe?.trim()) pos.hebelSet.add(c.dbEntry.hebel_hoehe.trim());
+                      if (c.dbEntry.direction?.trim()) pos.directionSet.add(c.dbEntry.direction.trim());
+                    }
+                    const positions = Array.from(positionsByKey.values()).sort((a, b) => Math.abs((b.buyAmount - b.sellAmount)) - Math.abs((a.buyAmount - a.sellAmount)));
+                    return (
+                      <Fragment key={alloc.name}>
+                        <tr
+                          onClick={() => setExpandedCategorized((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(alloc.name)) {
+                              next.delete(alloc.name);
+                              setExpandedCategorizedPosition((p) => {
+                                const n = new Set(p);
+                                for (const k of n) if (k.startsWith(alloc.name + "|")) n.delete(k);
+                                return n;
+                              });
+                            } else next.add(alloc.name);
+                            return next;
+                          })}
+                          className={`border-b border-neutral-800/50 hover:bg-neutral-800/20 cursor-pointer transition-colors ${isExpanded ? "bg-amber-500/10" : ""}`}
+                        >
+                          <td className="px-5 py-2 text-neutral-200 font-medium">{alloc.name}</td>
+                          <td className="px-5 py-2 text-neutral-400">{alloc.direction || "—"}</td>
+                          <td className="px-5 py-2 text-neutral-400 whitespace-nowrap" title={hebelDisplay}>{hebelDisplay}</td>
+                          <td className="px-5 py-2 text-right tabular-nums text-neutral-400">{positions.length}</td>
+                          <td className="px-5 py-2 text-right tabular-nums text-neutral-400">{alloc.contributions.length}</td>
+                          <td className="px-5 py-2 text-right tabular-nums text-emerald-400">{alloc.buyAmount > 0 ? formatAmount(alloc.buyAmount) : "—"}</td>
+                          <td className="px-5 py-2 text-right tabular-nums text-red-400">{alloc.sellAmount > 0 ? formatAmount(alloc.sellAmount) : "—"}</td>
+                          <td className="px-5 py-2 text-right tabular-nums text-amber-400">{formatAmount(alloc.totalAmount)}</td>
+                        </tr>
+                        {isExpanded && (
+                          <tr>
+                            <td colSpan={8} className="p-0 align-top bg-neutral-900/80 border-b border-neutral-800/50">
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-sm">
+                                  <thead className="bg-neutral-900 sticky top-0 z-10">
+                                    <tr className="text-left text-neutral-500 border-b border-neutral-800">
+                                      <th className="px-5 py-3 font-normal">ISIN</th>
+                                      <th className="px-5 py-3 font-normal">Kürzel</th>
+                                      <th className="px-5 py-3 font-normal">Name</th>
+                                      <th className="px-5 py-3 font-normal w-20">Direction</th>
+                                      <th className="px-5 py-3 font-normal w-16">Hebel</th>
+                                      <th className="px-5 py-3 font-normal text-right w-16">Trades</th>
+                                      <th className="px-5 py-3 font-normal text-right">Buy</th>
+                                      <th className="px-5 py-3 font-normal text-right">Sell</th>
+                                      <th className="px-5 py-3 font-normal text-right">Gesamt</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {positions.map((pos) => {
+                                      const posKey = `${alloc.name}|${pos.positionKey}`;
+                                      const isPosExpanded = expandedCategorizedPosition.has(posKey);
+                                      const posTotal = pos.buyAmount - pos.sellAmount;
+                                      const posTickerDisplay = [...new Set(pos.trades.map((t) => t.row.instmnem).filter(Boolean))].join(", ");
+                                      const posNameDisplay = [...new Set(pos.trades.map((t) => t.row.instshtnam).filter(Boolean))].join(", ");
+                                      const posHebelDisplay = pos.hebelSet.size > 0 ? Array.from(pos.hebelSet).join(", ") : "—";
+                                      const posDirectionDisplay = pos.directionSet.size > 0 ? Array.from(pos.directionSet).join(", ") : "—";
+                                      return (
+                                        <Fragment key={pos.positionKey}>
+                                          <tr
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setExpandedCategorizedPosition((prev) => {
+                                                const next = new Set(prev);
+                                                if (next.has(posKey)) next.delete(posKey);
+                                                else next.add(posKey);
+                                                return next;
+                                              });
+                                            }}
+                                            className={"border-b border-neutral-800/50 hover:bg-neutral-800/20 cursor-pointer transition-colors" + (isPosExpanded ? " bg-amber-500/10" : "")}
+                                            >
+                                              <td className="px-5 py-2 font-mono text-neutral-200 truncate max-w-[200px]">{pos.positionKey}</td>
+                                              <td className="px-5 py-2 font-mono text-neutral-400 text-sm">{posTickerDisplay || "—"}</td>
+                                              <td className="px-5 py-2 text-neutral-300 truncate max-w-[180px]" title={posNameDisplay}>{posNameDisplay || "—"}</td>
+                                              <td className="px-5 py-2 text-neutral-400">{posDirectionDisplay}</td>
+                                              <td className="px-5 py-2 text-neutral-400 whitespace-nowrap" title={posHebelDisplay}>{posHebelDisplay}</td>
+                                              <td className="px-5 py-2 text-right tabular-nums text-neutral-400">{pos.trades.length}</td>
+                                              <td className="px-5 py-2 text-right tabular-nums text-emerald-400">{pos.buyAmount > 0 ? formatAmount(pos.buyAmount) : "—"}</td>
+                                              <td className="px-5 py-2 text-right tabular-nums text-red-400">{pos.sellAmount > 0 ? formatAmount(pos.sellAmount) : "—"}</td>
+                                              <td className="px-5 py-2 text-right tabular-nums text-amber-400">{formatAmount(posTotal)}</td>
+                                            </tr>
+                                            {isPosExpanded && (
+                                              <tr>
+                                                <td colSpan={9} className="p-0 align-top bg-neutral-900/80 border-b border-neutral-800/50">
+                                                  <div className="px-5 py-3 flex justify-between items-center flex-wrap gap-2 border-b border-neutral-800/50">
+                                                    <span className="text-sm text-neutral-400">
+                                                      {pos.trades.length} Trades für {pos.positionKey}
+                                                    </span>
+                                                    <button
+                                                      onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setExpandedCategorizedPosition((p) => {
+                                                          const n = new Set(p);
+                                                          n.delete(posKey);
+                                                          return n;
+                                                        });
+                                                      }}
+                                                      className="text-xs text-neutral-500 hover:text-neutral-300"
+                                                    >
+                                                      Schließen
+                                                    </button>
+                                                  </div>
+                                                  <div className="overflow-x-auto max-h-64 overflow-y-auto">
+                                                    <table className="w-full text-sm">
+                                                      <thead className="sticky top-0 bg-neutral-900 z-10">
+                                                        <tr className="text-left text-neutral-500 border-b border-neutral-800">
+                                                          <th className="px-5 py-2 font-normal">B/S</th>
+                                                          <th className="px-5 py-2 font-normal w-20">Uhrzeit</th>
+                                                          <th className="px-5 py-2 font-normal">Kürzel</th>
+                                                          <th className="px-5 py-2 font-normal">Name</th>
+                                                          <th className="px-5 py-2 font-normal text-right">Ordermenge</th>
+                                                          <th className="px-5 py-2 font-normal text-right">Stückpreis</th>
+                                                          <th className="px-5 py-2 font-normal text-right">Betrag</th>
+                                                        </tr>
+                                                      </thead>
+                                                      <tbody>
+                                                        {pos.trades.map(({ row, dbEntry }, idx) => (
+                                                          <tr key={idx} className="border-b border-neutral-800/50 hover:bg-neutral-800/20">
+                                                            <td className="px-5 py-2">
+                                                              <span className={`inline-block px-2 py-0.5 rounded text-xs ${row.side === "B" ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"}`}>
+                                                                {row.side === "B" ? "Buy" : "Sell"}
+                                                              </span>
+                                                            </td>
+                                                            <td className="px-5 py-2 font-mono text-neutral-400 tabular-nums">{extractTimeFromTrandattim(row.trandattim)}</td>
+                                                            <td className="px-5 py-2 font-mono text-neutral-400">{row.instmnem || "—"}</td>
+                                                            <td className="px-5 py-2 text-neutral-300 truncate max-w-[160px]" title={row.instshtnam}>{row.instshtnam || "—"}</td>
+                                                            <td className="px-5 py-2 text-right tabular-nums text-neutral-400">{row.ordrqty != null ? formatOrdrqty(row.ordrqty) : "—"}</td>
+                                                            <td className="px-5 py-2 text-right tabular-nums text-neutral-400">{row.price != null ? formatDecimalDe(row.price) : "—"}</td>
+                                                            <td className="px-5 py-2 text-right tabular-nums text-neutral-200">{formatAmount(row.betrag)}</td>
+                                                          </tr>
+                                                        ))}
+                                                      </tbody>
+                                                    </table>
+                                                  </div>
+                                                </td>
+                                              </tr>
+                                            )}
+                                        </Fragment>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         {parseError && (
           <div className="mb-6 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-red-300 text-sm">
             {parseError}
@@ -1056,8 +1408,6 @@ export default function AuswertungPage() {
             </div>
           </div>
         )}
-
-        <MusteranalyseSection csvRows={csvRows} />
 
         {!csvRows.length && !parseError && !dbLoading && (
           <p className="text-neutral-500 text-sm text-center mt-4">

@@ -32,12 +32,48 @@ export interface SnapshotPosition {
   trades?: SnapshotPositionTrade[];
 }
 
+export interface SnapshotCategorizedTrade {
+  side: "B" | "S";
+  trandattim?: string;
+  instmnem: string;
+  instshtnam: string;
+  betrag: number;
+  ordrqty?: number;
+  price?: number;
+}
+
+export interface SnapshotCategorizedPosition {
+  positionKey: string;
+  tickerDisplay: string;
+  nameDisplay: string;
+  direction: string;
+  hebelHoehe: string;
+  tradesCount: number;
+  buyAmount: number;
+  sellAmount: number;
+  totalAmount: number;
+  trades: SnapshotCategorizedTrade[];
+}
+
+export interface SnapshotCategorizedAsset {
+  name: string;
+  direction: string | null;
+  hebelHoehe: string;
+  positionsCount: number;
+  tradesCount: number;
+  buyAmount: number;
+  sellAmount: number;
+  totalAmount: number;
+  positions: SnapshotCategorizedPosition[];
+}
+
 export interface Snapshot {
   id: string;
   snapshot_date: string;
   label: string | null;
   coins: SnapshotCoin[];
   positions?: SnapshotPosition[] | null;
+  categorized_assets?: SnapshotCategorizedAsset[] | null;
   created_at: string;
 }
 
@@ -48,7 +84,7 @@ export async function GET() {
 
   const { data, error } = await supabaseAdmin
     .from("portfolio_snapshots")
-    .select("id, snapshot_date, label, coins, positions, created_at")
+    .select("id, snapshot_date, label, coins, positions, categorized_assets, created_at")
     .order("snapshot_date", { ascending: false });
 
   if (error) {
@@ -70,15 +106,27 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json();
-  const { snapshot_date, label, coins, positions } = body;
+  const { snapshot_date, label, coins, positions, categorized_assets } = body;
 
-  if (!snapshot_date || !Array.isArray(coins) || coins.length === 0) {
-    return NextResponse.json({ error: "snapshot_date und coins sind erforderlich." }, { status: 400 });
+  if (!snapshot_date) {
+    return NextResponse.json({ error: "snapshot_date ist erforderlich." }, { status: 400 });
+  }
+  const coinsList = Array.isArray(coins) ? coins : [];
+  const catAssets = Array.isArray(categorized_assets) ? categorized_assets : [];
+  if (coinsList.length === 0 && catAssets.length === 0) {
+    return NextResponse.json({ error: "coins oder categorized_assets mit mindestens einem Eintrag erforderlich." }, { status: 400 });
   }
 
-  const insertData: Record<string, unknown> = { snapshot_date, label: label ?? null, coins };
+  const insertData: Record<string, unknown> = {
+    snapshot_date,
+    label: label ?? null,
+    coins: coinsList,
+  };
   if (Array.isArray(positions) && positions.length > 0) {
     insertData.positions = positions;
+  }
+  if (catAssets.length > 0) {
+    insertData.categorized_assets = catAssets;
   }
 
   const { data, error } = await supabaseAdmin

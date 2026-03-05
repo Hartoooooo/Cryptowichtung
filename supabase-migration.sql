@@ -10,3 +10,6 @@ create table if not exists weight_results (
 );
 
 create index if not exists idx_weight_results_isin on weight_results(isin);
+
+-- categorized_assets für Snapshots (Kategorisierte Assets Sektion)
+ALTER TABLE portfolio_snapshots ADD COLUMN IF NOT EXISTS categorized_assets jsonb;
