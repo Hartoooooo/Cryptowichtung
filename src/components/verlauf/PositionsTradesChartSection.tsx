@@ -51,12 +51,48 @@ interface SnapshotCoin {
   pct: number;
 }
 
+interface SnapshotCategorizedTrade {
+  side: "B" | "S";
+  trandattim?: string;
+  instmnem: string;
+  instshtnam: string;
+  betrag: number;
+  ordrqty?: number;
+  price?: number;
+}
+
+interface SnapshotCategorizedPosition {
+  positionKey: string;
+  tickerDisplay: string;
+  nameDisplay: string;
+  direction: string;
+  hebelHoehe: string;
+  tradesCount: number;
+  buyAmount: number;
+  sellAmount: number;
+  totalAmount: number;
+  trades: SnapshotCategorizedTrade[];
+}
+
+interface SnapshotCategorizedAsset {
+  name: string;
+  direction: string | null;
+  hebelHoehe: string;
+  positionsCount: number;
+  tradesCount: number;
+  buyAmount: number;
+  sellAmount: number;
+  totalAmount: number;
+  positions: SnapshotCategorizedPosition[];
+}
+
 interface Snapshot {
   id: string;
   snapshot_date: string;
   label: string | null;
   coins: SnapshotCoin[];
   positions?: SnapshotPosition[] | null;
+  categorized_assets?: SnapshotCategorizedAsset[] | null;
   created_at: string;
 }
 
@@ -224,18 +260,16 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
   const intradaySearchRef = useRef<HTMLInputElement>(null);
   const [intradayLineFilter, setIntradayLineFilter] = useState<"all" | "buy" | "sell" | "trades">("all");
   const [intradayCoinFilter, setIntradayCoinFilter] = useState<string>("");
-  const [intradayRohstoffFilter, setIntradayRohstoffFilter] = useState<string>("");
+  const [intradayCategorizedFilter, setIntradayCategorizedFilter] = useState<string>("");
   const [intradayBucketMinutes, setIntradayBucketMinutes] = useState<1 | 5 | 15>(15);
   const [intradayBrushRange, setIntradayBrushRange] = useState<{ startIndex: number; endIndex: number } | null>(null);
   const brushDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const BRUSH_DEBOUNCE_MS = 350;
-  const ROHSTOFF_LABELS: Record<string, string> = { XAU: "Gold", XAG: "Silber", GOLD: "Gold", SILVER: "Silber" };
-  const ROHSTOFF_IDS = ["XAU", "XAG", "GOLD", "SILVER"];
   const [tradesPageSize, setTradesPageSize] = useState<15 | 50 | 100>(15);
   const [tradesVisibleCount, setTradesVisibleCount] = useState(15);
   useEffect(() => {
     setTradesVisibleCount(tradesPageSize);
-  }, [tradesPageSize, selectedSnapshot?.id, intradayFilter, intradayCoinFilter, intradayRohstoffFilter]);
+  }, [tradesPageSize, selectedSnapshot?.id, intradayFilter, intradayCoinFilter, intradayCategorizedFilter]);
 
   useEffect(() => {
     if (brushDebounceRef.current) {
@@ -243,7 +277,7 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
       brushDebounceRef.current = null;
     }
     setIntradayBrushRange(null);
-  }, [intradayBucketMinutes, intradayFilter, intradayCoinFilter, intradayRohstoffFilter, selectedSnapshot?.id]);
+  }, [intradayBucketMinutes, intradayFilter, intradayCoinFilter, intradayCategorizedFilter, selectedSnapshot?.id]);
 
   const getPeriodKey = (dateStr: string) => {
     switch (granularity) {
@@ -417,6 +451,7 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
   const { intradayTrades, intradayBuckets } = useMemo(() => {
     const source = selectedSnapshot ?? snapshots[0];
     const positions = source?.positions ?? [];
+    const categorizedAssets = source?.categorized_assets ?? [];
     const trades: Array<{
       trandattim?: string;
       timeDisplay: string;
@@ -431,41 +466,42 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
       positionName: string;
       iban: string;
     }> = [];
+    const pushTrade = (
+      t: { trandattim?: string; side: "B" | "S"; betrag: number; ordrqty?: number; price?: number; instmnem?: string; instshtnam?: string },
+      etpLabel: string,
+      posName: string,
+      iban: string
+    ) => {
+      const min = parseTimeToMinutes(t.trandattim);
+      trades.push({
+        trandattim: t.trandattim,
+        timeDisplay: extractTimeFromTrandattim(t.trandattim),
+        minuteOfDay: min ?? 720,
+        side: t.side,
+        betrag: toNum(t.betrag),
+        ordrqty: t.ordrqty,
+        price: t.price,
+        instmnem: (t.instmnem ?? "").toString(),
+        instshtnam: (t.instshtnam ?? "").toString(),
+        etpLabel,
+        positionName: posName,
+        iban,
+      });
+    };
     for (const pos of positions) {
       const posName = (pos.tickerDisplay || pos.nameDisplay || pos.iban || "?").toString();
       const iban = (pos.iban ?? "").toString();
       for (const t of pos.trades ?? []) {
-        const min = parseTimeToMinutes(t.trandattim);
-        if (min != null) {
-          trades.push({
-            trandattim: t.trandattim,
-            timeDisplay: extractTimeFromTrandattim(t.trandattim),
-            minuteOfDay: min,
-            side: t.side,
-            betrag: toNum(t.betrag),
-            ordrqty: t.ordrqty,
-            price: t.price,
-            instmnem: t.instmnem ?? "",
-            instshtnam: t.instshtnam ?? "",
-            etpLabel: t.etpLabel ?? "",
-            positionName: posName,
-            iban,
-          });
-        } else {
-          trades.push({
-            trandattim: t.trandattim,
-            timeDisplay: extractTimeFromTrandattim(t.trandattim),
-            minuteOfDay: 720,
-            side: t.side,
-            betrag: toNum(t.betrag),
-            ordrqty: t.ordrqty,
-            price: t.price,
-            instmnem: t.instmnem ?? "",
-            instshtnam: t.instshtnam ?? "",
-            etpLabel: t.etpLabel ?? "",
-            positionName: posName,
-            iban,
-          });
+        pushTrade(t, t.etpLabel ?? "", posName, iban);
+      }
+    }
+    for (const alloc of categorizedAssets) {
+      const categoryName = alloc.name;
+      for (const pos of alloc.positions ?? []) {
+        const posName = (pos.tickerDisplay || pos.nameDisplay || pos.positionKey || "?").toString();
+        const iban = (pos.positionKey ?? "").toString();
+        for (const t of pos.trades ?? []) {
+          pushTrade(t, categoryName, posName, iban);
         }
       }
     }
@@ -494,39 +530,31 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
     return { intradayTrades: trades, intradayBuckets: buckets };
   }, [snapshots, selectedSnapshot]);
 
-  const { intradayCoins, intradayRohstoffe } = useMemo(() => {
+  const { intradayCoins, intradayCategorizedAssets } = useMemo(() => {
     const coins = new Set<string>();
-    const rohstoffe = new Set<string>();
+    const source = selectedSnapshot ?? snapshots[0];
+    const categorized = source?.categorized_assets ?? [];
     for (const t of intradayTrades) {
       const etp = (t.etpLabel ?? "").trim();
       if (!etp || etp === "Basket") continue;
-      if (ROHSTOFF_IDS.some((r) => etp.toUpperCase() === r || etp.toLowerCase().includes(r.toLowerCase()))) {
-        const label = ROHSTOFF_LABELS[etp.toUpperCase()] ?? etp;
-        rohstoffe.add(label);
-      } else {
+      const isCategorized = categorized.some((a) => a.name === etp);
+      if (!isCategorized) {
         coins.add(etp);
       }
     }
     return {
       intradayCoins: Array.from(coins).sort(),
-      intradayRohstoffe: Array.from(rohstoffe).sort(),
+      intradayCategorizedAssets: categorized.map((a) => a.name).sort(),
     };
-  }, [intradayTrades]);
+  }, [intradayTrades, selectedSnapshot, snapshots]);
 
   const { filteredIntradayTrades, filteredIntradayBuckets } = useMemo(() => {
     let filtered = intradayTrades;
     if (intradayCoinFilter) {
       filtered = filtered.filter((t) => (t.etpLabel ?? "") === intradayCoinFilter);
     }
-    if (intradayRohstoffFilter) {
-      const rohIds = Object.entries(ROHSTOFF_LABELS)
-        .filter(([, v]) => v === intradayRohstoffFilter)
-        .map(([k]) => k);
-      const qRoh = intradayRohstoffFilter.toLowerCase();
-      filtered = filtered.filter((t) => {
-        const e = (t.etpLabel ?? "").toUpperCase();
-        return rohIds.some((r) => e === r) || (t.etpLabel ?? "").toLowerCase().includes(qRoh);
-      });
+    if (intradayCategorizedFilter) {
+      filtered = filtered.filter((t) => (t.etpLabel ?? "") === intradayCategorizedFilter);
     }
     const q = intradayFilter.trim().toLowerCase();
     if (q) {
@@ -555,7 +583,7 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
       buckets.push({ timeLabel: label, bucketKey: m, buyAmount, sellAmount, count: bucketTrades.length });
     }
     return { filteredIntradayTrades: filtered, filteredIntradayBuckets: buckets };
-  }, [intradayTrades, intradayFilter, intradayCoinFilter, intradayRohstoffFilter, intradayBucketMinutes]);
+  }, [intradayTrades, intradayFilter, intradayCoinFilter, intradayCategorizedFilter, intradayBucketMinutes]);
 
   const pieData = useMemo(() => {
     if (positionOverviewData.length === 0) return [];
@@ -569,7 +597,11 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
     }));
   }, [positionOverviewData]);
 
-  const hasPositionData = snapshots.some((s) => s.positions && s.positions.length > 0);
+  const hasPositionData = snapshots.some((s) => {
+    if (s.positions && s.positions.length > 0) return true;
+    const cat = s.categorized_assets ?? [];
+    return cat.some((a) => (a.positions ?? []).some((p) => (p.trades ?? []).length > 0));
+  });
 
   if (!hasPositionData) {
     return (
@@ -827,7 +859,7 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
             <div>
               <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
                 <div className="flex items-center gap-3 flex-wrap">
-                  <h3 className="text-sm text-neutral-400">Trades nach Uhrzeit{intradayFilter || intradayCoinFilter || intradayRohstoffFilter ? ` – ${filteredIntradayTrades.length} Treffer` : ""}</h3>
+                  <h3 className="text-sm text-neutral-400">Trades nach Uhrzeit{intradayFilter || intradayCoinFilter || intradayCategorizedFilter ? ` – ${filteredIntradayTrades.length} Treffer` : ""}</h3>
                   <CustomSelectDropdown
                     value={String(intradayBucketMinutes)}
                     onChange={(v) => setIntradayBucketMinutes(Number(v) as 1 | 5 | 15)}
@@ -858,21 +890,21 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
                     value={intradayCoinFilter}
                     onChange={(v) => {
                       setIntradayCoinFilter(v);
-                      setIntradayRohstoffFilter("");
+                      setIntradayCategorizedFilter("");
                     }}
                     options={intradayCoins.map((c) => ({ value: c, label: c }))}
                     placeholder="Coin"
                     minWidth="90px"
                   />
                   <CustomSelectDropdown
-                    value={intradayRohstoffFilter}
+                    value={intradayCategorizedFilter}
                     onChange={(v) => {
-                      setIntradayRohstoffFilter(v);
+                      setIntradayCategorizedFilter(v);
                       setIntradayCoinFilter("");
                     }}
-                    options={intradayRohstoffe.map((r) => ({ value: r, label: r }))}
-                    placeholder="Rohstoff"
-                    minWidth="100px"
+                    options={intradayCategorizedAssets.map((r) => ({ value: r, label: r }))}
+                    placeholder="Kategorisierte Assets"
+                    minWidth="140px"
                   />
                   <div className="relative">
                   <input
@@ -1038,8 +1070,8 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
                     {filteredIntradayTrades.length === 0 ? (
                       <tr>
                         <td colSpan={8} className="px-4 py-6 text-center text-neutral-500">
-                          {intradayFilter || intradayCoinFilter || intradayRohstoffFilter
-                            ? `Keine Trades für ${intradayCoinFilter || intradayRohstoffFilter || intradayFilter}.`
+                          {intradayFilter || intradayCoinFilter || intradayCategorizedFilter
+                            ? `Keine Trades für ${intradayCoinFilter || intradayCategorizedFilter || intradayFilter}.`
                             : "Keine Trades mit Uhrzeit im Snapshot. Die CSV muss eine TRANDATTIM-Spalte enthalten."}
                         </td>
                       </tr>
