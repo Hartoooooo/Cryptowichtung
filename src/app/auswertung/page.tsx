@@ -398,7 +398,8 @@ function buildCategorizedAllocations(categorizedRows: CategorizedRow[]): Categor
   const map = new Map<string, CategorizedAssetAllocation>();
 
   for (const { row, dbEntry } of categorizedRows) {
-    const rohstoffArt = (dbEntry.rohstoff_art ?? "").trim() || "Sonstige";
+    const rohstoffArt = (dbEntry.rohstoff_art ?? "").trim();
+    if (!rohstoffArt) continue;
     const direction = (dbEntry.direction ?? "").trim().toLowerCase();
     const name = direction ? `${rohstoffArt} ${direction.charAt(0).toUpperCase() + direction.slice(1)}` : rohstoffArt;
     const positionKey = (row.iban ?? "").trim() || row.isincod;
