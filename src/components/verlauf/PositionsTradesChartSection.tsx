@@ -297,6 +297,7 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
   const [tradesVisibleCount, setTradesVisibleCount] = useState(15);
   const [tradesTableSortBy, setTradesTableSortBy] = useState<"ordrqty" | "uhrzeit" | "betrag">("uhrzeit");
   const [tradesTableSortDir, setTradesTableSortDir] = useState<"asc" | "desc">("asc");
+  const [showTimeMilliseconds, setShowTimeMilliseconds] = useState(false);
   useEffect(() => {
     setTradesVisibleCount(tradesPageSize);
   }, [tradesPageSize, selectedSnapshot?.id, intradayFilter, intradayCoinFilter, intradayCategorizedFilter]);
@@ -1087,6 +1088,14 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
                         className="px-4 py-2 font-normal cursor-pointer hover:text-neutral-300"
                       >
                         Uhrzeit {tradesTableSortBy === "uhrzeit" && (tradesTableSortDir === "asc" ? "↑" : "↓")}
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); setShowTimeMilliseconds((s) => !s); }}
+                          className="ml-2 rounded px-1.5 py-0.5 text-[10px] text-neutral-500 hover:text-neutral-300 hover:bg-neutral-700/50"
+                          title={showTimeMilliseconds ? "Millisekunden ausblenden" : "Millisekunden anzeigen"}
+                        >
+                          .ms
+                        </button>
                       </th>
                       <th className="px-4 py-2 font-normal w-16">B/S</th>
                       <th className="px-4 py-2 font-normal">Kürzel</th>
@@ -1127,7 +1136,7 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
                         .slice(0, tradesVisibleCount)
                         .map((t, idx) => (
                         <tr key={idx} className="border-b border-neutral-800/50 hover:bg-neutral-800/20">
-                          <td className="px-4 py-2 font-mono text-neutral-300 tabular-nums">{t.timeDisplay}</td>
+                          <td className="px-4 py-2 font-mono text-neutral-300 tabular-nums">{showTimeMilliseconds ? t.timeDisplay : t.timeDisplay.replace(/\.[\d]+$/, "")}</td>
                           <td className="px-4 py-2">
                             <span className={`inline-block px-2 py-0.5 rounded text-xs ${t.side === "B" ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"}`}>
                               {t.side === "B" ? "Buy" : "Sell"}
@@ -1139,7 +1148,7 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
                           <td className="px-4 py-2 text-right tabular-nums text-neutral-400">{t.price != null ? formatDecimalDe(t.price) : "—"}</td>
                           <td className="px-4 py-2 text-right tabular-nums text-neutral-200">{formatDecimalDe(t.betrag)}</td>
                           <td className="px-4 py-2 text-center">
-                            {t.etpLabel ? <span className="text-xs text-amber-400">{t.etpLabel}</span> : "—"}
+                            {t.etpLabel ? <span className={`whitespace-nowrap text-amber-400 ${/ [2345]x$/.test(t.etpLabel) ? "text-[10px]" : "text-xs"}`}>{t.etpLabel}</span> : "—"}
                           </td>
                         </tr>
                       ))

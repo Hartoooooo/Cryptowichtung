@@ -87,6 +87,43 @@ const COLORS = [
   "#e879f9","#f87171","#a3e635","#38bdf8",
 ];
 
+/** Sortierung für Kategorisierte Assets: Rohstoff mit Partnern (Gold → Gold Hebel → Gold Short → Silber → …) */
+const ROHSTOFF_ORDER = ["Gold", "Silber", "Öl"];
+function sortCategorizedAssetsByRohstoff<T extends { name: string }>(assets: T[]): T[] {
+  const baseIndex = (base: string) => {
+    const i = ROHSTOFF_ORDER.indexOf(base);
+    return i >= 0 ? i : ROHSTOFF_ORDER.length;
+  };
+  const getSortKey = (name: string) => {
+    let base: string;
+    let typeOrder: number;
+    let hebel = 0;
+    if (name.endsWith(" Short")) {
+      base = name.slice(0, -6).trim();
+      typeOrder = 2;
+    } else {
+      const hebelMatch = name.match(/\s([2345])x$/);
+      if (hebelMatch) {
+        base = name.slice(0, -3).trim();
+        typeOrder = 1;
+        hebel = parseInt(hebelMatch[1], 10);
+      } else {
+        base = name;
+        typeOrder = 0;
+      }
+    }
+    return [baseIndex(base), base, typeOrder, hebel] as const;
+  };
+  return [...assets].sort((a, b) => {
+    const [idxA, baseA, typeA, hebelA] = getSortKey(a.name);
+    const [idxB, baseB, typeB, hebelB] = getSortKey(b.name);
+    if (idxA !== idxB) return idxA - idxB;
+    if (baseA !== baseB) return baseA.localeCompare(baseB);
+    if (typeA !== typeB) return typeA - typeB;
+    return hebelA - hebelB;
+  });
+}
+
 function formatAmount(n: number) {
   return n.toLocaleString("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
@@ -130,7 +167,7 @@ export default function VerlaufPage() {
   const [selectedPosition, setSelectedPosition] = useState<string | null>(null);
   const [positionsPageSize, setPositionsPageSize] = useState<15 | 50 | 100>(15);
   const [positionsVisibleCount, setPositionsVisibleCount] = useState(15);
-  const [tablePositionSortBy, setTablePositionSortBy] = useState<"gesamt" | "buyAmount" | "sellAmount">("gesamt");
+  const [tablePositionSortBy, setTablePositionSortBy] = useState<"gesamt" | "buyAmount" | "sellAmount" | "count">("gesamt");
   const [tablePositionSortOrder, setTablePositionSortOrder] = useState<"asc" | "desc">("desc");
   const [expandedCategorized, setExpandedCategorized] = useState<Set<string>>(new Set());
   const [expandedCategorizedPosition, setExpandedCategorizedPosition] = useState<Set<string>>(new Set());
@@ -414,7 +451,15 @@ export default function VerlaufPage() {
                               <th className="px-5 py-3 font-normal">ISIN</th>
                               <th className="px-5 py-3 font-normal">Kürzel</th>
                               <th className="px-5 py-3 font-normal">Name</th>
-                              <th className="px-5 py-3 font-normal text-right w-16">Trades</th>
+                              <th
+                                className="px-5 py-3 font-normal text-right w-16 cursor-pointer hover:text-neutral-300 hover:bg-neutral-800/50 transition-colors select-none"
+                                onClick={() => {
+                                  setTablePositionSortBy("count");
+                                  setTablePositionSortOrder((prev) => (tablePositionSortBy === "count" ? (prev === "desc" ? "asc" : "desc") : "desc"));
+                                }}
+                              >
+                                Trades{tablePositionSortBy === "count" && (tablePositionSortOrder === "desc" ? " ↓" : " ↑")}
+                              </th>
                               <th
                                 className="px-5 py-3 font-normal text-right cursor-pointer hover:text-neutral-300 hover:bg-neutral-800/50 transition-colors select-none"
                                 onClick={() => {
@@ -434,7 +479,7 @@ export default function VerlaufPage() {
                                 Sell{tablePositionSortBy === "sellAmount" && (tablePositionSortOrder === "desc" ? " ↓" : " ↑")}
                               </th>
                               <th className="px-5 py-3 font-normal text-right">Gesamt</th>
-                              <th className="px-5 py-3 font-normal text-center w-24">Crypto</th>
+                              <th className="px-5 py-3 font-normal text-center w-24">Typ</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -456,7 +501,7 @@ export default function VerlaufPage() {
                                     <td className="px-5 py-2 text-right tabular-nums text-amber-400">{formatAmount(pos.gesamt)}</td>
                                     <td className="px-5 py-2 text-center">
                                       {pos.etpLabel ? (
-                                        <span className="inline-block px-2 py-0.5 rounded text-xs bg-amber-500/15 text-amber-400 font-medium">
+                                        <span className={`inline-block px-2 py-0.5 rounded whitespace-nowrap bg-amber-500/15 text-amber-400 font-medium ${/ [2345]x$/.test(pos.etpLabel) ? "text-[10px]" : "text-xs"}`}>
                                           {pos.etpLabel}
                                         </span>
                                       ) : (
@@ -505,7 +550,7 @@ export default function VerlaufPage() {
                                                 >
                                                   Betrag {tradesSortBy === "betrag" && (tradesSortDir === "asc" ? "↑" : "↓")}
                                                 </th>
-                                                <th className="px-5 py-2 font-normal text-center w-20">Crypto</th>
+                                                <th className="px-5 py-2 font-normal text-center w-20">Typ</th>
                                               </tr>
                                             </thead>
                                             <tbody>
@@ -530,7 +575,7 @@ export default function VerlaufPage() {
                                                   <td className="px-5 py-2 text-right tabular-nums text-neutral-400">{t.price != null ? formatDecimalDe(t.price) : "—"}</td>
                                                   <td className="px-5 py-2 text-right tabular-nums text-neutral-200">{formatDecimalDe(t.betrag)}</td>
                                                   <td className="px-5 py-2 text-center">
-                                                    {t.etpLabel ? <span className="text-xs text-amber-400">{t.etpLabel}</span> : "—"}
+                                                    {t.etpLabel ? <span className={`whitespace-nowrap text-amber-400 ${/ [2345]x$/.test(t.etpLabel) ? "text-[10px]" : "text-xs"}`}>{t.etpLabel}</span> : "—"}
                                                   </td>
                                                 </tr>
                                               ))}
@@ -582,7 +627,7 @@ export default function VerlaufPage() {
                             </tr>
                           </thead>
                           <tbody>
-                            {selectedSnapshot.categorized_assets.map((alloc) => {
+                            {sortCategorizedAssetsByRohstoff(selectedSnapshot.categorized_assets).map((alloc) => {
                               const isExpanded = expandedCategorized.has(alloc.name);
                               return (
                                 <Fragment key={alloc.name}>

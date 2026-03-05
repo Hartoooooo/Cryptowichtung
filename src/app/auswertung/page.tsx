@@ -363,6 +363,26 @@ function getRohstoffDisplayName(name: string): string {
   return ROHSTOFF_DISPLAY[upper] ?? name;
 }
 
+/** Richtung für Typ-Spalte: Long = kein Suffix, Short = " Short" */
+function directionToTypSuffix(direction: string): string {
+  const d = direction.trim().toLowerCase();
+  if (d === "long") return "";
+  if (d === "short") return " Short";
+  return direction ? " " + direction.charAt(0).toUpperCase() + direction.slice(1).toLowerCase() : "";
+}
+
+/** Typ-Label für Rohstoff aus categorized_assets: Long+Hebel → "Silber 3x", Long → "Silber", Short → "Silber Short" */
+function buildRohstoffTypLabel(
+  rohstoffArt: string,
+  direction: string,
+  hebelHoehe: string | null
+): string {
+  const d = direction.trim().toLowerCase();
+  const hebel = hasHebel(hebelHoehe);
+  if (d === "long" && hebel) return `${rohstoffArt} ${hebel}`;
+  return direction ? `${rohstoffArt}${directionToTypSuffix(direction)}` : rohstoffArt;
+}
+
 function buildAllocations(matched: MatchedRow[]): CryptoAllocation[] {
   const map = new Map<string, CryptoAllocation>();
 
@@ -400,8 +420,8 @@ function buildCategorizedAllocations(categorizedRows: CategorizedRow[]): Categor
   for (const { row, dbEntry } of categorizedRows) {
     const rohstoffArt = (dbEntry.rohstoff_art ?? "").trim();
     if (!rohstoffArt) continue;
-    const direction = (dbEntry.direction ?? "").trim().toLowerCase();
-    const name = direction ? `${rohstoffArt} ${direction.charAt(0).toUpperCase() + direction.slice(1)}` : rohstoffArt;
+    const direction = (dbEntry.direction ?? "").trim();
+    const name = buildRohstoffTypLabel(rohstoffArt, direction, dbEntry.hebel_hoehe);
     const positionKey = (row.iban ?? "").trim() || row.isincod;
 
     if (!map.has(name)) {
@@ -514,6 +534,8 @@ export default function AuswertungPage() {
   const [categorizedPositionsSortDir, setCategorizedPositionsSortDir] = useState<"asc" | "desc">("desc");
   const [tradesSortBy, setTradesSortBy] = useState<"ordrqty" | "price" | "betrag">("betrag");
   const [tradesSortDir, setTradesSortDir] = useState<"asc" | "desc">("desc");
+  const [aggregatedByIbanSortBy, setAggregatedByIbanSortBy] = useState<"gesamt" | "buyAmount" | "sellAmount" | "count">("gesamt");
+  const [aggregatedByIbanSortDir, setAggregatedByIbanSortDir] = useState<"asc" | "desc">("desc");
 
   useEffect(() => {
     Promise.all([
@@ -652,6 +674,7 @@ export default function AuswertungPage() {
       agg.count += 1;
       if (row.instmnem) agg.tickers.add(row.instmnem);
       const dbEntry = dbEntries.find((d) => d.isin.toUpperCase() === row.isincod);
+      const catEntry = categorizedAssets.find((c) => c.isin.toUpperCase() === row.isincod);
       const nameVal = (row.instshtnam ?? "").trim() || dbEntry?.name;
       if (nameVal) agg.names.add(nameVal);
       if (row.side === "B") agg.buyAmount += row.betrag;
@@ -663,6 +686,14 @@ export default function AuswertungPage() {
         const label = canonical === "Basket" ? "Basket" : (isRohstoff(canonical) ? getRohstoffDisplayName(canonical) : canonical);
         agg.etpLabels.add(label);
       }
+      if (catEntry) {
+        const rohstoffArt = (catEntry.rohstoff_art ?? "").trim();
+        if (rohstoffArt) {
+          const direction = (catEntry.direction ?? "").trim();
+          const label = buildRohstoffTypLabel(rohstoffArt, direction, catEntry.hebel_hoehe);
+          agg.etpLabels.add(label);
+        }
+      }
     }
     return Array.from(map.values())
       .map((a) => {
@@ -671,9 +702,14 @@ export default function AuswertungPage() {
         const tickerDisplay = Array.from(a.tickers).filter(Boolean).join(", ") || "—";
         const nameDisplay = Array.from(a.names).filter(Boolean).join(", ") || "—";
         return { ...a, gesamt: a.buyAmount - a.sellAmount, etpLabel, tickerDisplay, nameDisplay };
-      })
-      .sort((a, b) => Math.abs(b.gesamt) - Math.abs(a.gesamt));
-  }, [csvRows, ibanFilter, dbEntries]);
+      });
+  }, [csvRows, ibanFilter, dbEntries, categorizedAssets]);
+
+  const sortedAggregatedByIban = useMemo(() => {
+    const dir = aggregatedByIbanSortDir === "asc" ? 1 : -1;
+    const key = aggregatedByIbanSortBy;
+    return [...aggregatedByIban].sort((a, b) => dir * (Number(b[key] ?? 0) - Number(a[key] ?? 0)));
+  }, [aggregatedByIban, aggregatedByIbanSortBy, aggregatedByIbanSortDir]);
 
   const selectedPositionTrades = useMemo(() => {
     if (!selectedPosition) return [];
@@ -716,7 +752,8 @@ export default function AuswertungPage() {
         .sort((a, b) => Math.abs(b.betrag) - Math.abs(a.betrag));
       const trades = positionRows.map((row) => {
         const dbEntry = dbEntries.find((d) => d.isin.toUpperCase() === row.isincod);
-        const etpLabel = dbEntry
+        const catEntry = categorizedAssets.find((c) => c.isin.toUpperCase() === row.isincod);
+        let etpLabel: string = dbEntry
           ? dbEntry.constituents.length === 1
             ? (() => {
                 const c = normalizeCoinName(dbEntry.constituents[0].name);
@@ -724,6 +761,13 @@ export default function AuswertungPage() {
               })()
             : "Basket"
           : "";
+        if (!etpLabel && catEntry) {
+          const rohstoffArt = (catEntry.rohstoff_art ?? "").trim();
+          if (rohstoffArt) {
+            const direction = (catEntry.direction ?? "").trim();
+            etpLabel = buildRohstoffTypLabel(rohstoffArt, direction, catEntry.hebel_hoehe);
+          }
+        }
         return {
           side: row.side,
           trandattim: row.trandattim,
@@ -819,7 +863,7 @@ export default function AuswertungPage() {
       setSaveLoading(false);
       setTimeout(() => setSaveStatus("idle"), 3000);
     }
-  }, [allocations, aggregatedByIban, csvRows, dbEntries, categorizedAllocations]);
+  }, [allocations, aggregatedByIban, csvRows, dbEntries, categorizedAllocations, categorizedAssets]);
 
   const totalAllocated = allocations.reduce((s, a) => s + Math.abs(a.totalAmount), 0);
 
@@ -1618,7 +1662,7 @@ export default function AuswertungPage() {
         {csvRows.length > 0 && (
           <div className="mb-8 rounded-2xl border border-neutral-800 bg-neutral-900/50 overflow-hidden">
             <div className="px-5 py-3 border-b border-neutral-800 flex flex-wrap items-center justify-between gap-3">
-              <span className="text-base font-medium text-white">Größte Positionen ({aggregatedByIban.length})</span>
+              <span className="text-base font-medium text-white">Größte Positionen ({sortedAggregatedByIban.length})</span>
               <input
                 type="text"
                 value={ibanFilter}
@@ -1634,15 +1678,47 @@ export default function AuswertungPage() {
                     <th className="px-5 py-3 font-normal">ISIN</th>
                     <th className="px-5 py-3 font-normal">Kürzel</th>
                     <th className="px-5 py-3 font-normal">Name</th>
-                    <th className="px-5 py-3 font-normal text-right w-16">Trades</th>
-                    <th className="px-5 py-3 font-normal text-right">Buy</th>
-                    <th className="px-5 py-3 font-normal text-right">Sell</th>
-                    <th className="px-5 py-3 font-normal text-right">Gesamt</th>
-                    <th className="px-5 py-3 font-normal text-center w-24">Crypto</th>
+                    <th
+                      onClick={() => {
+                        setAggregatedByIbanSortBy("count");
+                        setAggregatedByIbanSortDir((d) => (aggregatedByIbanSortBy === "count" ? (d === "desc" ? "asc" : "desc") : "desc"));
+                      }}
+                      className="px-5 py-3 font-normal text-right w-16 cursor-pointer hover:text-neutral-300 hover:bg-neutral-800/50"
+                    >
+                      Trades{aggregatedByIbanSortBy === "count" && (aggregatedByIbanSortDir === "desc" ? " ↓" : " ↑")}
+                    </th>
+                    <th
+                      onClick={() => {
+                        setAggregatedByIbanSortBy("buyAmount");
+                        setAggregatedByIbanSortDir((d) => (aggregatedByIbanSortBy === "buyAmount" ? (d === "desc" ? "asc" : "desc") : "desc"));
+                      }}
+                      className="px-5 py-3 font-normal text-right cursor-pointer hover:text-neutral-300 hover:bg-neutral-800/50"
+                    >
+                      Buy{aggregatedByIbanSortBy === "buyAmount" && (aggregatedByIbanSortDir === "desc" ? " ↓" : " ↑")}
+                    </th>
+                    <th
+                      onClick={() => {
+                        setAggregatedByIbanSortBy("sellAmount");
+                        setAggregatedByIbanSortDir((d) => (aggregatedByIbanSortBy === "sellAmount" ? (d === "desc" ? "asc" : "desc") : "desc"));
+                      }}
+                      className="px-5 py-3 font-normal text-right cursor-pointer hover:text-neutral-300 hover:bg-neutral-800/50"
+                    >
+                      Sell{aggregatedByIbanSortBy === "sellAmount" && (aggregatedByIbanSortDir === "desc" ? " ↓" : " ↑")}
+                    </th>
+                    <th
+                      onClick={() => {
+                        setAggregatedByIbanSortBy("gesamt");
+                        setAggregatedByIbanSortDir((d) => (aggregatedByIbanSortBy === "gesamt" ? (d === "desc" ? "asc" : "desc") : "desc"));
+                      }}
+                      className="px-5 py-3 font-normal text-right cursor-pointer hover:text-neutral-300 hover:bg-neutral-800/50"
+                    >
+                      Gesamt{aggregatedByIbanSortBy === "gesamt" && (aggregatedByIbanSortDir === "desc" ? " ↓" : " ↑")}
+                    </th>
+                    <th className="px-5 py-3 font-normal text-center w-24">Typ</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {aggregatedByIban.map((agg) => (
+                  {sortedAggregatedByIban.map((agg) => (
                     <Fragment key={agg.iban}>
                       <tr
                         onClick={() => setSelectedPosition(selectedPosition === agg.iban ? null : agg.iban)}
@@ -1657,7 +1733,7 @@ export default function AuswertungPage() {
                         <td className="px-5 py-2 text-right tabular-nums text-amber-400">{formatAmount(agg.gesamt)}</td>
                         <td className="px-5 py-2 text-center">
                           {agg.etpLabel ? (
-                            <span className="inline-block px-2 py-0.5 rounded text-xs bg-amber-500/15 text-amber-400 font-medium">
+                            <span className={`inline-block px-2 py-0.5 rounded whitespace-nowrap bg-amber-500/15 text-amber-400 font-medium ${/ [2345]x$/.test(agg.etpLabel) ? "text-[10px]" : "text-xs"}`}>
                               {agg.etpLabel}
                             </span>
                           ) : (
@@ -1721,13 +1797,14 @@ export default function AuswertungPage() {
                                     >
                                       Betrag {positionSortBy === "betrag" && (positionSortDir === "asc" ? "↑" : "↓")}
                                     </th>
-                                    <th className="px-5 py-2 font-normal text-center w-20">Crypto</th>
+                                    <th className="px-5 py-2 font-normal text-center w-20">Typ</th>
                                   </tr>
                                 </thead>
                                 <tbody>
                                   {selectedPositionTrades.map((row, idx) => {
                                     const dbEntry = dbEntries.find((d) => d.isin.toUpperCase() === row.isincod);
-                                    const etpLabel = dbEntry
+                                    const catEntry = categorizedAssets.find((c) => c.isin.toUpperCase() === row.isincod);
+                                    let etpLabel: string | null = dbEntry
                                       ? dbEntry.constituents.length === 1
                                         ? (() => {
                                             const c = normalizeCoinName(dbEntry.constituents[0].name);
@@ -1735,6 +1812,13 @@ export default function AuswertungPage() {
                                           })()
                                         : "Basket"
                                       : null;
+                                    if (!etpLabel && catEntry) {
+                                      const rohstoffArt = (catEntry.rohstoff_art ?? "").trim();
+                                      if (rohstoffArt) {
+                                        const direction = (catEntry.direction ?? "").trim();
+                                        etpLabel = buildRohstoffTypLabel(rohstoffArt, direction, catEntry.hebel_hoehe);
+                                      }
+                                    }
                                     return (
                                       <tr key={idx} className="border-b border-neutral-800/50 hover:bg-neutral-800/20">
                                         <td className="px-5 py-2">
@@ -1749,7 +1833,7 @@ export default function AuswertungPage() {
                                         <td className="px-5 py-2 text-right tabular-nums text-neutral-400">{row.price != null ? formatDecimalDe(row.price) : "—"}</td>
                                         <td className="px-5 py-2 text-right tabular-nums text-neutral-200">{formatDecimalDe(row.betrag)}</td>
                                         <td className="px-5 py-2 text-center">
-                                          {etpLabel ? <span className="text-xs text-amber-400">{etpLabel}</span> : "—"}
+                                          {etpLabel ? <span className={`whitespace-nowrap text-amber-400 ${/ [2345]x$/.test(etpLabel) ? "text-[10px]" : "text-xs"}`}>{etpLabel}</span> : "—"}
                                         </td>
                                       </tr>
                                     );
