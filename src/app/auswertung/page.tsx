@@ -429,6 +429,59 @@ function buildCategorizedAllocations(categorizedRows: CategorizedRow[]): Categor
   return Array.from(map.values()).sort((a, b) => Math.abs(b.totalAmount) - Math.abs(a.totalAmount));
 }
 
+const HEBEL_VALUES = ["5x", "4x", "3x", "2x"] as const;
+
+function hasHebel(hebelHoehe: string | null): string | null {
+  const h = (hebelHoehe ?? "").trim();
+  if (!h) return null;
+  for (const v of HEBEL_VALUES) {
+    if (h.includes(v)) return v;
+  }
+  return null;
+}
+
+function buildHebelAllocations(categorizedRows: CategorizedRow[]): CategorizedAssetAllocation[] {
+  const map = new Map<string, CategorizedAssetAllocation>();
+
+  for (const { row, dbEntry } of categorizedRows) {
+    const hebel = hasHebel(dbEntry.hebel_hoehe);
+    if (!hebel) continue;
+    const direction = (dbEntry.direction ?? "").trim().toLowerCase();
+    const dirDisplay = direction ? direction.charAt(0).toUpperCase() + direction.slice(1) : "—";
+    const name = `${hebel} ${dirDisplay}`;
+    const positionKey = (row.iban ?? "").trim() || row.isincod;
+
+    if (!map.has(name)) {
+      map.set(name, {
+        name,
+        totalAmount: 0,
+        buyAmount: 0,
+        sellAmount: 0,
+        direction: dbEntry.direction,
+        hebelHoeheSet: new Set<string>(),
+        contributions: [],
+      });
+    }
+    const alloc = map.get(name)!;
+    if (row.side === "B") {
+      alloc.buyAmount += row.betrag;
+    } else {
+      alloc.sellAmount += row.betrag;
+    }
+    alloc.totalAmount = alloc.buyAmount - alloc.sellAmount;
+    if (dbEntry.hebel_hoehe?.trim()) alloc.hebelHoeheSet.add(dbEntry.hebel_hoehe.trim());
+    alloc.contributions.push({ row, positionKey, dbEntry });
+  }
+
+  const order = ["2x Long", "2x Short", "3x Long", "3x Short", "4x Long", "4x Short", "5x Long", "5x Short"];
+  return Array.from(map.values()).sort((a, b) => {
+    const ia = order.indexOf(a.name);
+    const ib = order.indexOf(b.name);
+    if (ia !== ib) return (ia >= 0 ? ia : 999) - (ib >= 0 ? ib : 999);
+    return Math.abs(b.totalAmount) - Math.abs(a.totalAmount);
+  });
+}
+
 export default function AuswertungPage() {
   const [dbEntries, setDbEntries] = useState<WeightResult[]>([]);
   const [dbLoading, setDbLoading] = useState(true);
@@ -447,13 +500,20 @@ export default function AuswertungPage() {
   const [saveStatus, setSaveStatus] = useState<"idle" | "ok" | "error">("idle");
   const [coinsExpanded, setCoinsExpanded] = useState(false);
   const [selectedPosition, setSelectedPosition] = useState<string | null>(null);
-  const [positionSortBy, setPositionSortBy] = useState<"betrag" | "side" | "kürzel" | "uhrzeit">("betrag");
+  const [positionSortBy, setPositionSortBy] = useState<"betrag" | "side" | "kürzel" | "uhrzeit" | "ordrqty" | "price">("betrag");
   const [positionSortDir, setPositionSortDir] = useState<"asc" | "desc">("desc");
   const [categorizedAssets, setCategorizedAssets] = useState<CategorizedAssetEntry[]>([]);
   const [categorizedRows, setCategorizedRows] = useState<CategorizedRow[]>([]);
   const [categorizedAllocations, setCategorizedAllocations] = useState<CategorizedAssetAllocation[]>([]);
+  const [hebelAllocations, setHebelAllocations] = useState<CategorizedAssetAllocation[]>([]);
   const [expandedCategorized, setExpandedCategorized] = useState<Set<string>>(new Set());
   const [expandedCategorizedPosition, setExpandedCategorizedPosition] = useState<Set<string>>(new Set());
+  const [expandedHebel, setExpandedHebel] = useState<Set<string>>(new Set());
+  const [expandedHebelPosition, setExpandedHebelPosition] = useState<Set<string>>(new Set());
+  const [categorizedPositionsSortBy, setCategorizedPositionsSortBy] = useState<"buyAmount" | "sellAmount" | "total">("total");
+  const [categorizedPositionsSortDir, setCategorizedPositionsSortDir] = useState<"asc" | "desc">("desc");
+  const [tradesSortBy, setTradesSortBy] = useState<"ordrqty" | "price" | "betrag">("betrag");
+  const [tradesSortDir, setTradesSortDir] = useState<"asc" | "desc">("desc");
 
   useEffect(() => {
     Promise.all([
@@ -498,9 +558,11 @@ export default function AuswertungPage() {
 
       const built = buildAllocations(matchedRows);
       const builtCategorized = buildCategorizedAllocations(categorizedRowsList);
+      const builtHebel = buildHebelAllocations(categorizedRowsList);
       setMatched(matchedRows);
       setCategorizedRows(categorizedRowsList);
       setCategorizedAllocations(builtCategorized);
+      setHebelAllocations(builtHebel);
       setNotFound(missing);
       setAllocations(built);
 
@@ -541,6 +603,7 @@ export default function AuswertungPage() {
       setMatched([]);
       setCategorizedRows([]);
       setCategorizedAllocations([]);
+      setHebelAllocations([]);
       setNotFound([]);
       setAllocations([]);
       try {
@@ -619,6 +682,8 @@ export default function AuswertungPage() {
       .sort((a, b) => {
         const mul = positionSortDir === "asc" ? 1 : -1;
         if (positionSortBy === "betrag") return mul * (Math.abs(b.betrag) - Math.abs(a.betrag));
+        if (positionSortBy === "ordrqty") return mul * ((a.ordrqty ?? 0) - (b.ordrqty ?? 0));
+        if (positionSortBy === "price") return mul * ((a.price ?? 0) - (b.price ?? 0));
         if (positionSortBy === "side") return mul * (a.side.localeCompare(b.side));
         if (positionSortBy === "uhrzeit") {
           const toSec = (raw: string | undefined) => {
@@ -1053,7 +1118,7 @@ export default function AuswertungPage() {
           <div className="mb-8 rounded-2xl border border-neutral-800 bg-neutral-900/50 overflow-hidden">
             <div className="px-5 py-3 border-b border-neutral-800 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-3">
-                <span className="text-sm text-neutral-400">Kategorisierte Assets ({categorizedAllocations.length})</span>
+                <span className="text-base font-medium text-white">Kategorisierte Assets ({categorizedAllocations.reduce((s, a) => s + a.contributions.length, 0)})</span>
                 {cryptoAllocations.length === 0 && rohstoffAllocations.length === 0 ? (
                   <>
                     <button
@@ -1104,7 +1169,15 @@ export default function AuswertungPage() {
                       if (c.dbEntry.hebel_hoehe?.trim()) pos.hebelSet.add(c.dbEntry.hebel_hoehe.trim());
                       if (c.dbEntry.direction?.trim()) pos.directionSet.add(c.dbEntry.direction.trim());
                     }
-                    const positions = Array.from(positionsByKey.values()).sort((a, b) => Math.abs((b.buyAmount - b.sellAmount)) - Math.abs((a.buyAmount - a.sellAmount)));
+                    const positionsRaw = Array.from(positionsByKey.values());
+                    const positions = [...positionsRaw].sort((a, b) => {
+                      const mul = categorizedPositionsSortDir === "asc" ? 1 : -1;
+                      if (categorizedPositionsSortBy === "buyAmount") return mul * (a.buyAmount - b.buyAmount);
+                      if (categorizedPositionsSortBy === "sellAmount") return mul * (a.sellAmount - b.sellAmount);
+                      const ta = a.buyAmount - a.sellAmount;
+                      const tb = b.buyAmount - b.sellAmount;
+                      return mul * (Math.abs(tb) - Math.abs(ta));
+                    });
                     return (
                       <Fragment key={alloc.name}>
                         <tr
@@ -1144,9 +1217,24 @@ export default function AuswertungPage() {
                                       <th className="px-5 py-3 font-normal w-20">Direction</th>
                                       <th className="px-5 py-3 font-normal w-16">Hebel</th>
                                       <th className="px-5 py-3 font-normal text-right w-16">Trades</th>
-                                      <th className="px-5 py-3 font-normal text-right">Buy</th>
-                                      <th className="px-5 py-3 font-normal text-right">Sell</th>
-                                      <th className="px-5 py-3 font-normal text-right">Gesamt</th>
+                                      <th
+                                        className="px-5 py-3 font-normal text-right cursor-pointer hover:text-neutral-400 select-none"
+                                        onClick={(e) => { e.stopPropagation(); setCategorizedPositionsSortBy("buyAmount"); setCategorizedPositionsSortDir((d) => (categorizedPositionsSortBy === "buyAmount" ? (d === "asc" ? "desc" : "asc") : "desc")); }}
+                                      >
+                                        Buy{categorizedPositionsSortBy === "buyAmount" && (categorizedPositionsSortDir === "asc" ? " ↑" : " ↓")}
+                                      </th>
+                                      <th
+                                        className="px-5 py-3 font-normal text-right cursor-pointer hover:text-neutral-400 select-none"
+                                        onClick={(e) => { e.stopPropagation(); setCategorizedPositionsSortBy("sellAmount"); setCategorizedPositionsSortDir((d) => (categorizedPositionsSortBy === "sellAmount" ? (d === "asc" ? "desc" : "asc") : "desc")); }}
+                                      >
+                                        Sell{categorizedPositionsSortBy === "sellAmount" && (categorizedPositionsSortDir === "asc" ? " ↑" : " ↓")}
+                                      </th>
+                                      <th
+                                        className="px-5 py-3 font-normal text-right cursor-pointer hover:text-neutral-400 select-none"
+                                        onClick={(e) => { e.stopPropagation(); setCategorizedPositionsSortBy("total"); setCategorizedPositionsSortDir((d) => (categorizedPositionsSortBy === "total" ? (d === "asc" ? "desc" : "asc") : "desc")); }}
+                                      >
+                                        Gesamt{categorizedPositionsSortBy === "total" && (categorizedPositionsSortDir === "asc" ? " ↑" : " ↓")}
+                                      </th>
                                     </tr>
                                   </thead>
                                   <tbody>
@@ -1211,13 +1299,36 @@ export default function AuswertungPage() {
                                                           <th className="px-5 py-2 font-normal w-20">Uhrzeit</th>
                                                           <th className="px-5 py-2 font-normal">Kürzel</th>
                                                           <th className="px-5 py-2 font-normal">Name</th>
-                                                          <th className="px-5 py-2 font-normal text-right">Ordermenge</th>
-                                                          <th className="px-5 py-2 font-normal text-right">Stückpreis</th>
-                                                          <th className="px-5 py-2 font-normal text-right">Betrag</th>
+                                                          <th
+                                                            onClick={(e) => { e.stopPropagation(); setTradesSortBy("ordrqty"); setTradesSortDir((d) => (tradesSortBy === "ordrqty" ? (d === "asc" ? "desc" : "asc") : "asc")); }}
+                                                            className="px-5 py-2 font-normal text-right cursor-pointer hover:text-neutral-400"
+                                                          >
+                                                            Ordermenge {tradesSortBy === "ordrqty" && (tradesSortDir === "asc" ? "↑" : "↓")}
+                                                          </th>
+                                                          <th
+                                                            onClick={(e) => { e.stopPropagation(); setTradesSortBy("price"); setTradesSortDir((d) => (tradesSortBy === "price" ? (d === "asc" ? "desc" : "asc") : "asc")); }}
+                                                            className="px-5 py-2 font-normal text-right cursor-pointer hover:text-neutral-400"
+                                                          >
+                                                            Stückpreis {tradesSortBy === "price" && (tradesSortDir === "asc" ? "↑" : "↓")}
+                                                          </th>
+                                                          <th
+                                                            onClick={(e) => { e.stopPropagation(); setTradesSortBy("betrag"); setTradesSortDir((d) => (tradesSortBy === "betrag" ? (d === "asc" ? "desc" : "asc") : "desc")); }}
+                                                            className="px-5 py-2 font-normal text-right cursor-pointer hover:text-neutral-400"
+                                                          >
+                                                            Betrag {tradesSortBy === "betrag" && (tradesSortDir === "asc" ? "↑" : "↓")}
+                                                          </th>
                                                         </tr>
                                                       </thead>
                                                       <tbody>
-                                                        {pos.trades.map(({ row, dbEntry }, idx) => (
+                                                        {[...pos.trades]
+                                                          .sort((a, b) => {
+                                                            const mul = tradesSortDir === "asc" ? 1 : -1;
+                                                            const ra = a.row, rb = b.row;
+                                                            if (tradesSortBy === "ordrqty") return mul * ((ra.ordrqty ?? 0) - (rb.ordrqty ?? 0));
+                                                            if (tradesSortBy === "price") return mul * ((ra.price ?? 0) - (rb.price ?? 0));
+                                                            return mul * (Math.abs(ra.betrag) - Math.abs(rb.betrag));
+                                                          })
+                                                          .map(({ row, dbEntry }, idx) => (
                                                           <tr key={idx} className="border-b border-neutral-800/50 hover:bg-neutral-800/20">
                                                             <td className="px-5 py-2">
                                                               <span className={`inline-block px-2 py-0.5 rounded text-xs ${row.side === "B" ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"}`}>
@@ -1256,6 +1367,243 @@ export default function AuswertungPage() {
           </div>
         )}
 
+        {/* Hebel Produkte (2x, 3x, 4x, 5x aus categorized_assets, nach Long/Short) */}
+        {hebelAllocations.length > 0 && (
+          <div className="mb-8 rounded-2xl border border-neutral-800 bg-neutral-900/50 overflow-hidden">
+            <div className="px-5 py-3 border-b border-neutral-800 flex flex-wrap items-center justify-between gap-3">
+              <span className="text-base font-medium text-white">Hebel Produkte ({hebelAllocations.reduce((s, a) => s + a.contributions.length, 0)})</span>
+              <span className="text-sm text-neutral-500 flex items-center gap-4">
+                <span>Buy: <span className="text-emerald-400 tabular-nums">{formatAmount(hebelAllocations.reduce((s, a) => s + a.buyAmount, 0))}</span></span>
+                <span>Sell: <span className="text-red-400 tabular-nums">{formatAmount(hebelAllocations.reduce((s, a) => s + a.sellAmount, 0))}</span></span>
+                <span>Gesamt: <span className="text-amber-400 tabular-nums">{formatAmount(hebelAllocations.reduce((s, a) => s + a.totalAmount, 0))}</span></span>
+              </span>
+            </div>
+            <div className="overflow-x-auto max-h-[42rem] overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-neutral-900 z-10">
+                  <tr className="text-left text-neutral-500 border-b border-neutral-800">
+                    <th className="px-5 py-3 font-normal">Hebel</th>
+                    <th className="px-5 py-3 font-normal w-16">Hebel</th>
+                    <th className="px-5 py-3 font-normal text-right w-16">Pos.</th>
+                    <th className="px-5 py-3 font-normal text-right w-20">Trades</th>
+                    <th className="px-5 py-3 font-normal text-right">Buy</th>
+                    <th className="px-5 py-3 font-normal text-right">Sell</th>
+                    <th className="px-5 py-3 font-normal text-right">Gesamt</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {hebelAllocations.map((alloc) => {
+                    const isExpanded = expandedHebel.has(alloc.name);
+                    const hebelDisplay = alloc.hebelHoeheSet.size === 0 ? "—" : Array.from(alloc.hebelHoeheSet).join(", ");
+                    const positionsByKey = new Map<string, { positionKey: string; trades: { row: CsvRow; dbEntry: CategorizedAssetEntry }[]; buyAmount: number; sellAmount: number; hebelSet: Set<string>; directionSet: Set<string> }>();
+                    for (const c of alloc.contributions) {
+                      if (!positionsByKey.has(c.positionKey)) {
+                        positionsByKey.set(c.positionKey, { positionKey: c.positionKey, trades: [], buyAmount: 0, sellAmount: 0, hebelSet: new Set(), directionSet: new Set() });
+                      }
+                      const pos = positionsByKey.get(c.positionKey)!;
+                      pos.trades.push({ row: c.row, dbEntry: c.dbEntry });
+                      if (c.row.side === "B") pos.buyAmount += c.row.betrag;
+                      else pos.sellAmount += c.row.betrag;
+                      if (c.dbEntry.hebel_hoehe?.trim()) pos.hebelSet.add(c.dbEntry.hebel_hoehe.trim());
+                      if (c.dbEntry.direction?.trim()) pos.directionSet.add(c.dbEntry.direction.trim());
+                    }
+                    const positionsRaw = Array.from(positionsByKey.values());
+                    const positions = [...positionsRaw].sort((a, b) => {
+                      const mul = categorizedPositionsSortDir === "asc" ? 1 : -1;
+                      if (categorizedPositionsSortBy === "buyAmount") return mul * (a.buyAmount - b.buyAmount);
+                      if (categorizedPositionsSortBy === "sellAmount") return mul * (a.sellAmount - b.sellAmount);
+                      const ta = a.buyAmount - a.sellAmount;
+                      const tb = b.buyAmount - b.sellAmount;
+                      return mul * (Math.abs(tb) - Math.abs(ta));
+                    });
+                    return (
+                      <Fragment key={alloc.name}>
+                        <tr
+                          onClick={() => setExpandedHebel((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(alloc.name)) {
+                              next.delete(alloc.name);
+                              setExpandedHebelPosition((p) => {
+                                const n = new Set(p);
+                                for (const k of n) if (k.startsWith(alloc.name + "|")) n.delete(k);
+                                return n;
+                              });
+                            } else next.add(alloc.name);
+                            return next;
+                          })}
+                          className={`border-b border-neutral-800/50 hover:bg-neutral-800/20 cursor-pointer transition-colors ${isExpanded ? "bg-amber-500/10" : ""}`}
+                        >
+                          <td className="px-5 py-2 text-neutral-200 font-medium">{alloc.name}</td>
+                          <td className="px-5 py-2 text-neutral-400 whitespace-nowrap" title={hebelDisplay}>{hebelDisplay}</td>
+                          <td className="px-5 py-2 text-right tabular-nums text-neutral-400">{positions.length}</td>
+                          <td className="px-5 py-2 text-right tabular-nums text-neutral-400">{alloc.contributions.length}</td>
+                          <td className="px-5 py-2 text-right tabular-nums text-emerald-400">{alloc.buyAmount > 0 ? formatAmount(alloc.buyAmount) : "—"}</td>
+                          <td className="px-5 py-2 text-right tabular-nums text-red-400">{alloc.sellAmount > 0 ? formatAmount(alloc.sellAmount) : "—"}</td>
+                          <td className="px-5 py-2 text-right tabular-nums text-amber-400">{formatAmount(alloc.totalAmount)}</td>
+                        </tr>
+                        {isExpanded && (
+                          <tr>
+                            <td colSpan={7} className="p-0 align-top bg-neutral-900/80 border-b border-neutral-800/50">
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-sm">
+                                  <thead className="bg-neutral-900 sticky top-0 z-10">
+                                    <tr className="text-left text-neutral-500 border-b border-neutral-800">
+                                      <th className="px-5 py-3 font-normal">ISIN</th>
+                                      <th className="px-5 py-3 font-normal">Kürzel</th>
+                                      <th className="px-5 py-3 font-normal">Name</th>
+                                      <th className="px-5 py-3 font-normal w-20">Direction</th>
+                                      <th className="px-5 py-3 font-normal w-16">Hebel</th>
+                                      <th className="px-5 py-3 font-normal text-right w-16">Trades</th>
+                                      <th
+                                        className="px-5 py-3 font-normal text-right cursor-pointer hover:text-neutral-400 select-none"
+                                        onClick={(e) => { e.stopPropagation(); setCategorizedPositionsSortBy("buyAmount"); setCategorizedPositionsSortDir((d) => (categorizedPositionsSortBy === "buyAmount" ? (d === "asc" ? "desc" : "asc") : "desc")); }}
+                                      >
+                                        Buy{categorizedPositionsSortBy === "buyAmount" && (categorizedPositionsSortDir === "asc" ? " ↑" : " ↓")}
+                                      </th>
+                                      <th
+                                        className="px-5 py-3 font-normal text-right cursor-pointer hover:text-neutral-400 select-none"
+                                        onClick={(e) => { e.stopPropagation(); setCategorizedPositionsSortBy("sellAmount"); setCategorizedPositionsSortDir((d) => (categorizedPositionsSortBy === "sellAmount" ? (d === "asc" ? "desc" : "asc") : "desc")); }}
+                                      >
+                                        Sell{categorizedPositionsSortBy === "sellAmount" && (categorizedPositionsSortDir === "asc" ? " ↑" : " ↓")}
+                                      </th>
+                                      <th
+                                        className="px-5 py-3 font-normal text-right cursor-pointer hover:text-neutral-400 select-none"
+                                        onClick={(e) => { e.stopPropagation(); setCategorizedPositionsSortBy("total"); setCategorizedPositionsSortDir((d) => (categorizedPositionsSortBy === "total" ? (d === "asc" ? "desc" : "asc") : "desc")); }}
+                                      >
+                                        Gesamt{categorizedPositionsSortBy === "total" && (categorizedPositionsSortDir === "asc" ? " ↑" : " ↓")}
+                                      </th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {positions.map((pos) => {
+                                      const posKey = `${alloc.name}|${pos.positionKey}`;
+                                      const isPosExpanded = expandedHebelPosition.has(posKey);
+                                      const posTotal = pos.buyAmount - pos.sellAmount;
+                                      const posTickerDisplay = [...new Set(pos.trades.map((t) => t.row.instmnem).filter(Boolean))].join(", ");
+                                      const posNameDisplay = [...new Set(pos.trades.map((t) => t.row.instshtnam).filter(Boolean))].join(", ");
+                                      const posHebelDisplay = pos.hebelSet.size > 0 ? Array.from(pos.hebelSet).join(", ") : "—";
+                                      const posDirectionDisplay = pos.directionSet.size > 0 ? Array.from(pos.directionSet).join(", ") : "—";
+                                      return (
+                                        <Fragment key={pos.positionKey}>
+                                          <tr
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setExpandedHebelPosition((prev) => {
+                                                const next = new Set(prev);
+                                                if (next.has(posKey)) next.delete(posKey);
+                                                else next.add(posKey);
+                                                return next;
+                                              });
+                                            }}
+                                            className={"border-b border-neutral-800/50 hover:bg-neutral-800/20 cursor-pointer transition-colors" + (isPosExpanded ? " bg-amber-500/10" : "")}
+                                          >
+                                            <td className="px-5 py-2 font-mono text-neutral-200 truncate max-w-[200px]">{pos.positionKey}</td>
+                                            <td className="px-5 py-2 font-mono text-neutral-400 text-sm">{posTickerDisplay || "—"}</td>
+                                            <td className="px-5 py-2 text-neutral-300 truncate max-w-[180px]" title={posNameDisplay}>{posNameDisplay || "—"}</td>
+                                            <td className="px-5 py-2 text-neutral-400">{posDirectionDisplay}</td>
+                                            <td className="px-5 py-2 text-neutral-400 whitespace-nowrap" title={posHebelDisplay}>{posHebelDisplay}</td>
+                                            <td className="px-5 py-2 text-right tabular-nums text-neutral-400">{pos.trades.length}</td>
+                                            <td className="px-5 py-2 text-right tabular-nums text-emerald-400">{pos.buyAmount > 0 ? formatAmount(pos.buyAmount) : "—"}</td>
+                                            <td className="px-5 py-2 text-right tabular-nums text-red-400">{pos.sellAmount > 0 ? formatAmount(pos.sellAmount) : "—"}</td>
+                                            <td className="px-5 py-2 text-right tabular-nums text-amber-400">{formatAmount(posTotal)}</td>
+                                          </tr>
+                                          {isPosExpanded && (
+                                            <tr>
+                                              <td colSpan={9} className="p-0 align-top bg-neutral-900/80 border-b border-neutral-800/50">
+                                                <div className="px-5 py-3 flex justify-between items-center flex-wrap gap-2 border-b border-neutral-800/50">
+                                                  <span className="text-sm text-neutral-400">
+                                                    {pos.trades.length} Trades für {pos.positionKey}
+                                                  </span>
+                                                  <button
+                                                    onClick={(e) => {
+                                                      e.stopPropagation();
+                                                      setExpandedHebelPosition((p) => {
+                                                        const n = new Set(p);
+                                                        n.delete(posKey);
+                                                        return n;
+                                                      });
+                                                    }}
+                                                    className="text-xs text-neutral-500 hover:text-neutral-300"
+                                                  >
+                                                    Schließen
+                                                  </button>
+                                                </div>
+                                                <div className="overflow-x-auto max-h-64 overflow-y-auto">
+                                                  <table className="w-full text-sm">
+                                                    <thead className="sticky top-0 bg-neutral-900 z-10">
+                                                      <tr className="text-left text-neutral-500 border-b border-neutral-800">
+                                                        <th className="px-5 py-2 font-normal">B/S</th>
+                                                        <th className="px-5 py-2 font-normal w-20">Uhrzeit</th>
+                                                        <th className="px-5 py-2 font-normal">Kürzel</th>
+                                                        <th className="px-5 py-2 font-normal">Name</th>
+                                                        <th
+                                                          onClick={(e) => { e.stopPropagation(); setTradesSortBy("ordrqty"); setTradesSortDir((d) => (tradesSortBy === "ordrqty" ? (d === "asc" ? "desc" : "asc") : "asc")); }}
+                                                          className="px-5 py-2 font-normal text-right cursor-pointer hover:text-neutral-400"
+                                                        >
+                                                          Ordermenge {tradesSortBy === "ordrqty" && (tradesSortDir === "asc" ? "↑" : "↓")}
+                                                        </th>
+                                                        <th
+                                                          onClick={(e) => { e.stopPropagation(); setTradesSortBy("price"); setTradesSortDir((d) => (tradesSortBy === "price" ? (d === "asc" ? "desc" : "asc") : "asc")); }}
+                                                          className="px-5 py-2 font-normal text-right cursor-pointer hover:text-neutral-400"
+                                                        >
+                                                          Stückpreis {tradesSortBy === "price" && (tradesSortDir === "asc" ? "↑" : "↓")}
+                                                        </th>
+                                                        <th
+                                                          onClick={(e) => { e.stopPropagation(); setTradesSortBy("betrag"); setTradesSortDir((d) => (tradesSortBy === "betrag" ? (d === "asc" ? "desc" : "asc") : "desc")); }}
+                                                          className="px-5 py-2 font-normal text-right cursor-pointer hover:text-neutral-400"
+                                                        >
+                                                          Betrag {tradesSortBy === "betrag" && (tradesSortDir === "asc" ? "↑" : "↓")}
+                                                        </th>
+                                                      </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                      {[...pos.trades]
+                                                        .sort((a, b) => {
+                                                          const mul = tradesSortDir === "asc" ? 1 : -1;
+                                                          const ra = a.row, rb = b.row;
+                                                          if (tradesSortBy === "ordrqty") return mul * ((ra.ordrqty ?? 0) - (rb.ordrqty ?? 0));
+                                                          if (tradesSortBy === "price") return mul * ((ra.price ?? 0) - (rb.price ?? 0));
+                                                          return mul * (Math.abs(ra.betrag) - Math.abs(rb.betrag));
+                                                        })
+                                                        .map(({ row, dbEntry }, idx) => (
+                                                        <tr key={idx} className="border-b border-neutral-800/50 hover:bg-neutral-800/20">
+                                                          <td className="px-5 py-2">
+                                                            <span className={`inline-block px-2 py-0.5 rounded text-xs ${row.side === "B" ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"}`}>
+                                                              {row.side === "B" ? "Buy" : "Sell"}
+                                                            </span>
+                                                          </td>
+                                                          <td className="px-5 py-2 font-mono text-neutral-400 tabular-nums">{extractTimeFromTrandattim(row.trandattim)}</td>
+                                                          <td className="px-5 py-2 font-mono text-neutral-400">{row.instmnem || "—"}</td>
+                                                          <td className="px-5 py-2 text-neutral-300 truncate max-w-[160px]" title={row.instshtnam}>{row.instshtnam || "—"}</td>
+                                                          <td className="px-5 py-2 text-right tabular-nums text-neutral-400">{row.ordrqty != null ? formatOrdrqty(row.ordrqty) : "—"}</td>
+                                                          <td className="px-5 py-2 text-right tabular-nums text-neutral-400">{row.price != null ? formatDecimalDe(row.price) : "—"}</td>
+                                                          <td className="px-5 py-2 text-right tabular-nums text-neutral-200">{formatAmount(row.betrag)}</td>
+                                                        </tr>
+                                                      ))}
+                                                    </tbody>
+                                                  </table>
+                                                </div>
+                                              </td>
+                                            </tr>
+                                          )}
+                                        </Fragment>
+                                      );
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         {parseError && (
           <div className="mb-6 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-red-300 text-sm">
             {parseError}
@@ -1270,7 +1618,7 @@ export default function AuswertungPage() {
         {csvRows.length > 0 && (
           <div className="mb-8 rounded-2xl border border-neutral-800 bg-neutral-900/50 overflow-hidden">
             <div className="px-5 py-3 border-b border-neutral-800 flex flex-wrap items-center justify-between gap-3">
-              <span className="text-sm text-neutral-400">Größte Positionen ({aggregatedByIban.length})</span>
+              <span className="text-base font-medium text-white">Größte Positionen ({aggregatedByIban.length})</span>
               <input
                 type="text"
                 value={ibanFilter}
@@ -1355,8 +1703,18 @@ export default function AuswertungPage() {
                                       Kürzel {positionSortBy === "kürzel" && (positionSortDir === "asc" ? "↑" : "↓")}
                                     </th>
                                     <th className="px-5 py-2 font-normal">Name</th>
-                                    <th className="px-5 py-2 font-normal text-right">Ordermenge</th>
-                                    <th className="px-5 py-2 font-normal text-right">Stückpreis</th>
+                                    <th
+                                      onClick={(e) => { e.stopPropagation(); setPositionSortBy("ordrqty"); setPositionSortDir((d) => (positionSortBy === "ordrqty" ? (d === "asc" ? "desc" : "asc") : "asc")); }}
+                                      className="px-5 py-2 font-normal text-right cursor-pointer hover:text-neutral-400"
+                                    >
+                                      Ordermenge {positionSortBy === "ordrqty" && (positionSortDir === "asc" ? "↑" : "↓")}
+                                    </th>
+                                    <th
+                                      onClick={(e) => { e.stopPropagation(); setPositionSortBy("price"); setPositionSortDir((d) => (positionSortBy === "price" ? (d === "asc" ? "desc" : "asc") : "asc")); }}
+                                      className="px-5 py-2 font-normal text-right cursor-pointer hover:text-neutral-400"
+                                    >
+                                      Stückpreis {positionSortBy === "price" && (positionSortDir === "asc" ? "↑" : "↓")}
+                                    </th>
                                     <th
                                       onClick={(e) => { e.stopPropagation(); setPositionSortBy("betrag"); setPositionSortDir((d) => (positionSortBy === "betrag" ? (d === "asc" ? "desc" : "asc") : "desc")); }}
                                       className="px-5 py-2 font-normal text-right cursor-pointer hover:text-neutral-400"

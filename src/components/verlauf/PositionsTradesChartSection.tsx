@@ -147,6 +147,18 @@ function parseTimeToMinutes(raw: string | undefined): number | null {
   return Math.min(1439, Math.max(0, total));
 }
 
+/** Liefert Sekunden seit Mitternacht (0–86399) für exakte Zeitsortierung */
+function parseTimeToSeconds(raw: string | undefined): number {
+  const timeStr = extractTimeFromTrandattim(raw);
+  if (timeStr === "—") return 0;
+  const m = timeStr.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (!m) return 0;
+  const h = parseInt(m[1], 10) || 0;
+  const min = parseInt(m[2], 10) || 0;
+  const sec = m[3] ? parseInt(m[3], 10) || 0 : 0;
+  return Math.min(86399, Math.max(0, h * 3600 + min * 60 + sec));
+}
+
 function formatDate(dateStr: string) {
   return new Date(dateStr).toLocaleDateString("de-DE", {
     day: "2-digit", month: "2-digit", year: "numeric",
@@ -267,6 +279,8 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
   const BRUSH_DEBOUNCE_MS = 350;
   const [tradesPageSize, setTradesPageSize] = useState<15 | 50 | 100>(15);
   const [tradesVisibleCount, setTradesVisibleCount] = useState(15);
+  const [tradesTableSortBy, setTradesTableSortBy] = useState<"ordrqty" | "uhrzeit" | "betrag">("uhrzeit");
+  const [tradesTableSortDir, setTradesTableSortDir] = useState<"asc" | "desc">("asc");
   useEffect(() => {
     setTradesVisibleCount(tradesPageSize);
   }, [tradesPageSize, selectedSnapshot?.id, intradayFilter, intradayCoinFilter, intradayCategorizedFilter]);
@@ -456,6 +470,7 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
       trandattim?: string;
       timeDisplay: string;
       minuteOfDay: number;
+      secondsOfDay: number;
       side: "B" | "S";
       betrag: number;
       ordrqty?: number;
@@ -473,10 +488,12 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
       iban: string
     ) => {
       const min = parseTimeToMinutes(t.trandattim);
+      const secs = parseTimeToSeconds(t.trandattim);
       trades.push({
         trandattim: t.trandattim,
         timeDisplay: extractTimeFromTrandattim(t.trandattim),
         minuteOfDay: min ?? 720,
+        secondsOfDay: secs || (min ?? 720) * 60,
         side: t.side,
         betrag: toNum(t.betrag),
         ordrqty: t.ordrqty,
@@ -505,7 +522,7 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
         }
       }
     }
-    trades.sort((a, b) => a.minuteOfDay - b.minuteOfDay);
+    trades.sort((a, b) => a.secondsOfDay - b.secondsOfDay);
     const BUCKET_MIN = 15;
     const buckets: Array<{ timeLabel: string; bucketKey: number; buyAmount: number; sellAmount: number; count: number }> = [];
     for (let m = 7 * 60 + 30; m <= 23 * 60; m += BUCKET_MIN) {
@@ -542,9 +559,14 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
         coins.add(etp);
       }
     }
+    const ROHSTOFF_ORDER = ["Gold Long", "Gold Short", "Silber Long", "Silber Short", "Öl Long", "Öl Short"];
+    const catNames = new Set(categorized.map((a) => a.name));
+    const ordered = ROHSTOFF_ORDER.filter((n) => catNames.has(n));
+    const rest = [...catNames].filter((n) => !ROHSTOFF_ORDER.includes(n)).sort();
+    const intradayCategorizedAssets = [...ordered, ...rest];
     return {
       intradayCoins: Array.from(coins).sort(),
-      intradayCategorizedAssets: categorized.map((a) => a.name).sort(),
+      intradayCategorizedAssets,
     };
   }, [intradayTrades, selectedSnapshot, snapshots]);
 
@@ -561,10 +583,7 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
       filtered = filtered.filter(
         (t) =>
           (t.instmnem ?? "").toLowerCase().includes(q) ||
-          (t.etpLabel ?? "").toLowerCase().includes(q) ||
-          (t.positionName ?? "").toLowerCase().includes(q) ||
-          (t.iban ?? "").toLowerCase().includes(q) ||
-          (t.instshtnam ?? "").toLowerCase().includes(q)
+          (t.iban ?? "").toLowerCase().includes(q)
       );
     }
     const bucketMin = intradayBucketMinutes;
@@ -903,7 +922,7 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
                       setIntradayCoinFilter("");
                     }}
                     options={intradayCategorizedAssets.map((r) => ({ value: r, label: r }))}
-                    placeholder="Kategorisierte Assets"
+                    placeholder="Rohstoff"
                     minWidth="140px"
                   />
                   <div className="relative">
@@ -1056,14 +1075,29 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-neutral-900 z-10">
                     <tr className="text-left text-neutral-500 border-b border-neutral-800">
-                      <th className="px-4 py-2 font-normal">Uhrzeit</th>
+                      <th
+                        onClick={() => { setTradesTableSortBy("uhrzeit"); setTradesTableSortDir((d) => (tradesTableSortBy === "uhrzeit" ? (d === "asc" ? "desc" : "asc") : "asc")); }}
+                        className="px-4 py-2 font-normal cursor-pointer hover:text-neutral-300"
+                      >
+                        Uhrzeit {tradesTableSortBy === "uhrzeit" && (tradesTableSortDir === "asc" ? "↑" : "↓")}
+                      </th>
                       <th className="px-4 py-2 font-normal w-16">B/S</th>
                       <th className="px-4 py-2 font-normal">Kürzel</th>
                       <th className="px-4 py-2 font-normal">Name</th>
-                      <th className="px-4 py-2 font-normal text-right">Ordermenge</th>
+                      <th
+                        onClick={() => { setTradesTableSortBy("ordrqty"); setTradesTableSortDir((d) => (tradesTableSortBy === "ordrqty" ? (d === "asc" ? "desc" : "asc") : "asc")); }}
+                        className="px-4 py-2 font-normal text-right cursor-pointer hover:text-neutral-300"
+                      >
+                        Ordermenge {tradesTableSortBy === "ordrqty" && (tradesTableSortDir === "asc" ? "↑" : "↓")}
+                      </th>
                       <th className="px-4 py-2 font-normal text-right">Stückpreis</th>
-                      <th className="px-4 py-2 font-normal text-right">Betrag</th>
-                      <th className="px-4 py-2 font-normal text-center w-20">Crypto</th>
+                      <th
+                        onClick={() => { setTradesTableSortBy("betrag"); setTradesTableSortDir((d) => (tradesTableSortBy === "betrag" ? (d === "asc" ? "desc" : "asc") : "desc")); }}
+                        className="px-4 py-2 font-normal text-right cursor-pointer hover:text-neutral-300"
+                      >
+                        Betrag {tradesTableSortBy === "betrag" && (tradesTableSortDir === "asc" ? "↑" : "↓")}
+                      </th>
+                      <th className="px-4 py-2 font-normal text-center w-20">Typ</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1076,7 +1110,15 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
                         </td>
                       </tr>
                     ) : (
-                      filteredIntradayTrades.slice(0, tradesVisibleCount).map((t, idx) => (
+                      [...filteredIntradayTrades]
+                        .sort((a, b) => {
+                          const mul = tradesTableSortDir === "asc" ? 1 : -1;
+                          if (tradesTableSortBy === "uhrzeit") return mul * ((a.secondsOfDay ?? 0) - (b.secondsOfDay ?? 0));
+                          if (tradesTableSortBy === "ordrqty") return mul * ((a.ordrqty ?? 0) - (b.ordrqty ?? 0));
+                          return mul * (Math.abs(a.betrag) - Math.abs(b.betrag));
+                        })
+                        .slice(0, tradesVisibleCount)
+                        .map((t, idx) => (
                         <tr key={idx} className="border-b border-neutral-800/50 hover:bg-neutral-800/20">
                           <td className="px-4 py-2 font-mono text-neutral-300 tabular-nums">{t.timeDisplay}</td>
                           <td className="px-4 py-2">
