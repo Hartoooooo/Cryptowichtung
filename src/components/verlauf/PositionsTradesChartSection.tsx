@@ -435,6 +435,21 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
     return { count: valid.length, totalValue };
   }, [snapshots, selectedSnapshot]);
 
+  /** Trades, Buy, Sell nur für den gewählten Snapshot (Tag) */
+  const selectedSnapshotTotals = useMemo(() => {
+    const source = selectedSnapshot ?? snapshots[0];
+    const positions = source?.positions ?? [];
+    let trades = 0;
+    let buy = 0;
+    let sell = 0;
+    for (const p of positions) {
+      trades += (p.trades ?? []).length || (p.count ?? 0);
+      buy += toNum(p.buyAmount);
+      sell += toNum(p.sellAmount);
+    }
+    return { trades, buy, sell };
+  }, [snapshots, selectedSnapshot]);
+
   const tradeVolumeOverTime = useMemo(() => {
     return aggregatedPeriods.map((p) => ({
       ...p,
@@ -642,7 +657,7 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
 
   return (
     <div className="rounded-2xl border border-neutral-800 bg-neutral-900/50 overflow-hidden mb-8">
-      <div className="px-5 py-4 border-b border-neutral-800 flex flex-wrap items-center justify-between gap-4">
+      <div className="px-5 py-4 border-b border-neutral-800 flex flex-wrap items-center gap-4">
         <div className="flex items-center gap-3 shrink-0">
           <h2 className="text-lg font-semibold text-neutral-100 tracking-tight">
             Positions- & Trades-Analyse
@@ -663,7 +678,15 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
             />
           )}
         </div>
-        <div className="flex items-center gap-4 flex-wrap flex-1 min-w-0 justify-end">
+        <div className="flex-1 flex justify-center items-center gap-4 min-w-0">
+          <span className="text-sm text-neutral-500">TR</span>
+          <span className="text-lg font-semibold text-amber-400 tabular-nums">{selectedSnapshotTotals.trades}</span>
+          <span className="text-sm text-neutral-500">B</span>
+          <span className="text-lg font-semibold text-emerald-400 tabular-nums">{formatAmount(selectedSnapshotTotals.buy)}</span>
+          <span className="text-sm text-neutral-500">S</span>
+          <span className="text-lg font-semibold text-red-400 tabular-nums">{formatAmount(selectedSnapshotTotals.sell)}</span>
+        </div>
+        <div className="flex items-center gap-4 flex-wrap shrink-0">
           {viewMode === "compare" && (
             <div className="flex items-center gap-3 flex-wrap">
               <div className="flex rounded-lg border border-neutral-700 overflow-hidden text-xs">
