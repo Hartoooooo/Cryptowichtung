@@ -135,6 +135,17 @@ function extractTimeFromTrandattim(raw: string | undefined): string {
   return "—";
 }
 
+/** Exakte Uhrzeit aus der CSV (inkl. Sekundenbruchteile falls vorhanden) */
+function getExactTimeDisplay(raw: string | undefined): string {
+  if (!raw || !String(raw).trim()) return "—";
+  const s = String(raw).trim();
+  const withFrac = s.match(/\d{1,2}:\d{2}(:\d{2})?([.,]\d+)?/);
+  if (withFrac) return withFrac[0].replace(",", ".");
+  const compact = s.match(/(\d{2})(\d{2})(\d{2})(\d{2,})?$/);
+  if (compact) return compact[3] ? `${compact[1]}:${compact[2]}:${compact[3]}${compact[4] ? "." + compact[4] : ""}` : `${compact[1]}:${compact[2]}`;
+  return extractTimeFromTrandattim(raw);
+}
+
 /** Liefert Minuten seit Mitternacht (0–1439) für Intraday-Buckets */
 function parseTimeToMinutes(raw: string | undefined): number | null {
   const timeStr = extractTimeFromTrandattim(raw);
@@ -147,16 +158,21 @@ function parseTimeToMinutes(raw: string | undefined): number | null {
   return Math.min(1439, Math.max(0, total));
 }
 
-/** Liefert Sekunden seit Mitternacht (0–86399) für exakte Zeitsortierung */
+/** Liefert Sekunden seit Mitternacht (inkl. Millisekunden) für exakte Zeitsortierung */
 function parseTimeToSeconds(raw: string | undefined): number {
-  const timeStr = extractTimeFromTrandattim(raw);
-  if (timeStr === "—") return 0;
-  const m = timeStr.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (!raw || !String(raw).trim()) return 0;
+  const s = String(raw).trim();
+  const m = s.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?([.,](\d+))?/);
   if (!m) return 0;
   const h = parseInt(m[1], 10) || 0;
   const min = parseInt(m[2], 10) || 0;
   const sec = m[3] ? parseInt(m[3], 10) || 0 : 0;
-  return Math.min(86399, Math.max(0, h * 3600 + min * 60 + sec));
+  let frac = 0;
+  if (m[5]) {
+    const fracStr = m[5];
+    frac = parseInt(fracStr.slice(0, 3).padEnd(3, "0"), 10) / 1000;
+  }
+  return Math.min(86400, Math.max(0, h * 3600 + min * 60 + sec + frac));
 }
 
 function formatDate(dateStr: string) {
@@ -466,6 +482,13 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
     const source = selectedSnapshot ?? snapshots[0];
     const positions = source?.positions ?? [];
     const categorizedAssets = source?.categorized_assets ?? [];
+    const isinToCategory = new Map<string, string>();
+    for (const alloc of categorizedAssets) {
+      for (const pos of alloc.positions ?? []) {
+        const key = (pos.positionKey ?? "").trim().toUpperCase();
+        if (key && !isinToCategory.has(key)) isinToCategory.set(key, alloc.name);
+      }
+    }
     const trades: Array<{
       trandattim?: string;
       timeDisplay: string;
@@ -481,45 +504,29 @@ export default function PositionsTradesChartSection({ snapshots, selectedSnapsho
       positionName: string;
       iban: string;
     }> = [];
-    const pushTrade = (
-      t: { trandattim?: string; side: "B" | "S"; betrag: number; ordrqty?: number; price?: number; instmnem?: string; instshtnam?: string },
-      etpLabel: string,
-      posName: string,
-      iban: string
-    ) => {
-      const min = parseTimeToMinutes(t.trandattim);
-      const secs = parseTimeToSeconds(t.trandattim);
-      trades.push({
-        trandattim: t.trandattim,
-        timeDisplay: extractTimeFromTrandattim(t.trandattim),
-        minuteOfDay: min ?? 720,
-        secondsOfDay: secs || (min ?? 720) * 60,
-        side: t.side,
-        betrag: toNum(t.betrag),
-        ordrqty: t.ordrqty,
-        price: t.price,
-        instmnem: (t.instmnem ?? "").toString(),
-        instshtnam: (t.instshtnam ?? "").toString(),
-        etpLabel,
-        positionName: posName,
-        iban,
-      });
-    };
     for (const pos of positions) {
       const posName = (pos.tickerDisplay || pos.nameDisplay || pos.iban || "?").toString();
       const iban = (pos.iban ?? "").toString();
+      const categoryFromIsin = isinToCategory.get(iban.trim().toUpperCase());
       for (const t of pos.trades ?? []) {
-        pushTrade(t, t.etpLabel ?? "", posName, iban);
-      }
-    }
-    for (const alloc of categorizedAssets) {
-      const categoryName = alloc.name;
-      for (const pos of alloc.positions ?? []) {
-        const posName = (pos.tickerDisplay || pos.nameDisplay || pos.positionKey || "?").toString();
-        const iban = (pos.positionKey ?? "").toString();
-        for (const t of pos.trades ?? []) {
-          pushTrade(t, categoryName, posName, iban);
-        }
+        const etpLabel = (categoryFromIsin ?? (t as { etpLabel?: string }).etpLabel ?? "").toString();
+        const min = parseTimeToMinutes(t.trandattim);
+        const secs = parseTimeToSeconds(t.trandattim);
+        trades.push({
+          trandattim: t.trandattim,
+          timeDisplay: getExactTimeDisplay(t.trandattim),
+          minuteOfDay: min ?? 720,
+          secondsOfDay: secs || (min ?? 720) * 60,
+          side: t.side,
+          betrag: toNum(t.betrag),
+          ordrqty: t.ordrqty,
+          price: t.price,
+          instmnem: (t.instmnem ?? "").toString(),
+          instshtnam: (t.instshtnam ?? "").toString(),
+          etpLabel,
+          positionName: posName,
+          iban,
+        });
       }
     }
     trades.sort((a, b) => a.secondsOfDay - b.secondsOfDay);
